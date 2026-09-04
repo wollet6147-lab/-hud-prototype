@@ -1,0 +1,278 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#000000">
+<title>F1rstHUD Prototype 0.1D</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;background:#000;color:#fff;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
+#hud{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;transform:scaleX(-1)}
+#street{font-size:clamp(38px,10vw,82px);font-weight:850;line-height:1.02;max-width:95vw}
+#direction{font-size:clamp(19px,4.5vw,34px);font-weight:800;margin-top:10px;letter-spacing:.06em}
+#block{font-size:clamp(25px,6.5vw,50px);font-weight:760;margin-top:12px}
+#next{font-size:clamp(20px,5vw,39px);font-weight:760;margin-top:46px;max-width:95vw}
+#status{font-size:clamp(12px,3vw,16px);font-weight:600;margin-top:22px;opacity:.55}
+#setup{position:fixed;left:10px;right:10px;bottom:max(12px,env(safe-area-inset-bottom));display:flex;gap:7px;justify-content:center;z-index:4}
+input,button{background:#111;color:#ddd;border:1px solid #666;border-radius:11px;padding:10px;font-size:14px}
+input{width:205px;min-width:0}
+#gear{position:fixed;right:8px;top:max(8px,env(safe-area-inset-top));background:transparent;border:0;color:#444;font-size:22px;z-index:5}
+@media(orientation:landscape){
+ #street{font-size:13vh} #direction{font-size:5.5vh;margin-top:4px} #block{font-size:8vh;margin-top:6px}
+ #next{font-size:5.8vh;margin-top:24px} #status{margin-top:12px}
+}
+</style>
+</head>
+<body>
+<div id="hud">
+ <div id="street">READY</div>
+ <div id="direction">—</div>
+ <div id="block">LIVE LOCATION</div>
+ <div id="next">NEXT: —</div>
+ <div id="status">0.1D • ROAD + EXIT INTELLIGENCE</div>
+</div>
+
+<div id="setup">
+ <input id="token" placeholder="pk. Mapbox public token" autocapitalize="off" autocomplete="off">
+ <button id="start">ENABLE LOCATION</button>
+ <button id="mirror">MIRROR</button>
+</div>
+<button id="gear">⚙︎</button>
+
+<script>
+const $=id=>document.getElementById(id);
+const hud=$("hud"), setup=$("setup");
+let watchId=null, mirrored=true, trace=[], course=null, lastQuery=0;
+let lastRoad="", roadCandidate="", roadCandidateHits=0, lastBlock="";
+let lockedAhead=null, lastDir="", dirCandidate="", dirHits=0;
+
+const saved=localStorage.getItem("mapbox_public_token");
+if(saved) $("token").value=saved;
+
+function meters(lat1,lon1,lat2,lon2){
+ const R=6371000,p=Math.PI/180;
+ const x=(lon2-lon1)*p*Math.cos((lat1+lat2)/2*p), y=(lat2-lat1)*p;
+ return Math.sqrt(x*x+y*y)*R;
+}
+function bearing(lat1,lon1,lat2,lon2){
+ const p=Math.PI/180;
+ const y=Math.sin((lon2-lon1)*p)*Math.cos(lat2*p);
+ const x=Math.cos(lat1*p)*Math.sin(lat2*p)-Math.sin(lat1*p)*Math.cos(lat2*p)*Math.cos((lon2-lon1)*p);
+ return (Math.atan2(y,x)/p+360)%360;
+}
+function destination(lat,lon,deg,m){
+ const R=6371000,d=m/R,q=deg*Math.PI/180,p1=lat*Math.PI/180,l1=lon*Math.PI/180;
+ const p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(q));
+ const l2=l1+Math.atan2(Math.sin(q)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));
+ return [l2*180/Math.PI,p2*180/Math.PI];
+}
+function normalizeRoad(s){
+ s=String(s||"").toUpperCase().trim().replace(/\s+/g," ");
+ s=s.replace(/\b(WEST|EAST|NORTH|SOUTH)\s+FARM[- ]TO[- ]MARKET(?: ROAD)?\s*(\d+)\b/g,"FM $2");
+ s=s.replace(/\bFARM[- ]TO[- ]MARKET(?: ROAD)?\s*(\d+)\b/g,"FM $1");
+ s=s.replace(/\bFARM ROAD\s*(\d+)\b/g,"FM $1");
+ s=s.replace(/\bCOUNTY ROAD\s*(\d+)\b/g,"CR $1");
+ return s;
+}
+function roadKey(s){
+ return normalizeRoad(s).replace(/\b(NORTH|SOUTH|EAST|WEST|NB|SB|EB|WB)\b/g,"")
+  .replace(/\b(ROAD|RD|STREET|ST|HIGHWAY|HWY|EXPRESSWAY|EXPY|FREEWAY|FWY)\b/g,"")
+  .replace(/[^A-Z0-9]/g,"");
+}
+function sameRoad(a,b){
+ const x=roadKey(a),y=roadKey(b);
+ return !!x&&!!y&&(x===y||x.includes(y)||y.includes(x));
+}
+function isHighway(s){
+ s=normalizeRoad(s);
+ return /\b(INTERSTATE|I-?\s?\d+|US\s*-?\s*\d+|FREEWAY|EXPRESSWAY|TOLLWAY|TURNPIKE)\b/.test(s);
+}
+function cardinal(h){
+ if(h==null) return "";
+ h=(h+360)%360;
+ if(h>=315||h<45)return "NORTH";
+ if(h<135)return "EAST";
+ if(h<225)return "SOUTH";
+ return "WEST";
+}
+function stableDirection(h){
+ const d=cardinal(h); if(!d)return lastDir;
+ if(!lastDir){lastDir=d;return d;}
+ if(d===lastDir){dirCandidate="";dirHits=0;return lastDir;}
+ if(d===dirCandidate)dirHits++; else {dirCandidate=d;dirHits=1;}
+ if(dirHits>=2){lastDir=d;dirCandidate="";dirHits=0;}
+ return lastDir;
+}
+function showDistance(m){
+ const ft=m*3.28084;
+ if(ft>=2640)return (ft/5280).toFixed(1)+" MI";
+ return Math.max(50,Math.round(ft/50)*50)+" FT";
+}
+
+function makeBlock(n){
+ const m=String(n||"").match(/\d+/);
+ if(!m) return "";
+ const v=Number(m[0]);
+ if(!Number.isFinite(v)||v<100) return ""; // Never show 0 BLOCK / tiny bogus ranges.
+ return Math.floor(v/100)*100+" BLOCK";
+}
+function setRoad(candidate,confidence){
+ candidate=normalizeRoad(candidate);
+ if(!candidate) return lastRoad;
+ if(!lastRoad){ lastRoad=candidate; return lastRoad; }
+ if(candidate===lastRoad){ roadCandidate=""; roadCandidateHits=0; return lastRoad; }
+
+ // Road lock: high-confidence map match may switch quickly; otherwise require repeat confirmation.
+ if(confidence>=0.80){
+   lastRoad=candidate; roadCandidate=""; roadCandidateHits=0; return lastRoad;
+ }
+ if(candidate===roadCandidate) roadCandidateHits++; else {roadCandidate=candidate; roadCandidateHits=1;}
+ if(roadCandidateHits>=2){ lastRoad=candidate; roadCandidate=""; roadCandidateHits=0; }
+ return lastRoad;
+}
+async function reverseGeocode(lat,lon,token){
+ const u=`https://api.mapbox.com/search/geocode/v6/reverse?longitude=${lon}&latitude=${lat}&country=us&types=address&limit=1&access_token=${encodeURIComponent(token)}`;
+ const r=await fetch(u); if(!r.ok) throw new Error("reverse");
+ const j=await r.json(), f=j.features?.[0], p=f?.properties||{}, c=p.context||{};
+ return {
+   road: normalizeRoad(c.street?.name || p.name || ""),
+   number: c.address?.address_number || p.address_number || ""
+ };
+}
+async function mapMatch(token){
+ if(trace.length<2) return null;
+ const pts=trace.slice(-7);
+ const coords=pts.map(p=>`${p.lon},${p.lat}`).join(";");
+ const timestamps=pts.map(p=>Math.floor(p.time/1000)).join(";");
+ const radiuses=pts.map(p=>Math.min(50,Math.max(8,Math.round(p.acc||15)))).join(";");
+ const u=`https://api.mapbox.com/matching/v5/mapbox/driving/${coords}.json?tidy=true&timestamps=${timestamps}&radiuses=${radiuses}&steps=true&overview=false&access_token=${encodeURIComponent(token)}`;
+ const r=await fetch(u); if(!r.ok) return null;
+ const j=await r.json();
+ if(j.code!=="Ok") return null;
+ const tp=[...(j.tracepoints||[])].reverse().find(Boolean);
+ if(!tp) return null;
+ const idx=tp.matchings_index ?? 0;
+ const confidence=j.matchings?.[idx]?.confidence ?? 0;
+ return {road:normalizeRoad(tp.name), confidence, location:tp.location};
+}
+async function lookAhead(lat,lon,heading,token,currentRoad){
+ if(heading==null) return null;
+ const highway=isHighway(currentRoad);
+ const end=destination(lat,lon,heading,5000);
+ const u=`https://api.mapbox.com/directions/v5/mapbox/driving/${lon},${lat};${end[0]},${end[1]}?steps=true&overview=false&banner_instructions=true&bearings=${Math.round(heading)},75;&access_token=${encodeURIComponent(token)}`;
+ const r=await fetch(u); if(!r.ok) return null;
+ const j=await r.json();
+ const steps=j.routes?.[0]?.legs?.[0]?.steps||[];
+ const choices=[];
+
+ for(const step of steps){
+   const loc=step.maneuver?.location;
+   if(!loc) continue;
+   const d=meters(lat,lon,loc[1],loc[0]);
+   if(d<20) continue;
+
+   const name=normalizeRoad(step.name);
+   const type=String(step.maneuver?.type||"").toLowerCase();
+   const banner=step.bannerInstructions?.[0]?.primary;
+   const bannerText=normalizeRoad(banner?.text||"");
+   const exitComp=(banner?.components||[]).find(x=>x.type==="exit-number");
+   const exitNo=String(exitComp?.text||"").trim();
+   const exitLike=type.includes("off ramp")||type.includes("exit")||/\bEXIT\b/.test(bannerText);
+
+   if(highway){
+     if(exitLike){
+       let label=exitNo ? `EXIT ${exitNo}` : "EXIT";
+       let target=bannerText;
+       if(target && !sameRoad(target,currentRoad) && !/^EXIT\b/.test(target)) label+=` • ${target}`;
+       else if(name && !sameRoad(name,currentRoad)) label+=` • ${name}`;
+       choices.push({name:label,d,kind:"exit"});
+     }
+   }else if(name && !sameRoad(name,currentRoad)){
+     choices.push({name,d,kind:"road"});
+   }
+ }
+ choices.sort((a,b)=>a.d-b.d);
+ return choices[0]||null;
+}
+async function refresh(lat,lon,acc){
+ const token=$("token").value.trim();
+ if(!token.startsWith("pk.")){ $("status").textContent="PUBLIC TOKEN NEEDED"; return; }
+ localStorage.setItem("mapbox_public_token",token);
+
+ try{
+   const [rev,match]=await Promise.all([reverseGeocode(lat,lon,token),mapMatch(token)]);
+   const matchedRoad=match?.road || rev.road || lastRoad;
+   const road=setRoad(matchedRoad,match?.confidence ?? 0);
+   $("street").textContent=road || "STREET UNKNOWN";
+   $("direction").textContent=stableDirection(course) || "—";
+
+   // Do not invent blocks on limited-access highways.
+   // On normal roads, only accept an address block when reverse geocoding agrees with our matched road.
+   let b="";
+   if(!isHighway(road) && rev.number && sameRoad(rev.road,road)) b=makeBlock(rev.number);
+   if(b) lastBlock=b;
+   $("block").textContent=isHighway(road) ? "" : (b || "BLOCK —");
+
+   const fresh=await lookAhead(lat,lon,course,token,road);
+   if(fresh?.name){
+     if(!lockedAhead || lockedAhead.name===fresh.name || fresh.d<lockedAhead.d+250){
+       lockedAhead={...fresh,time:Date.now()};
+     }
+   }
+   // Keep the target visible through short API misses at speed instead of flashing blank.
+   if(lockedAhead && Date.now()-lockedAhead.time>18000) lockedAhead=null;
+
+   if(course==null) $("next").textContent="NEXT: START MOVING";
+   else if(lockedAhead) $("next").textContent=`NEXT: ${lockedAhead.name} • ${showDistance(lockedAhead.d)}`;
+   else $("next").textContent=isHighway(road) ? "NEXT EXIT: —" : "NEXT: —";
+
+   const matchText=match?` • MATCH ${Math.round(match.confidence*100)}%`:"";
+   $("status").textContent=`LIVE • GPS ±${Math.round(acc*3.28084)} FT${matchText} • 0.1D`;
+   setup.style.display="none";
+ }catch(e){
+   $("status").textContent="LOOKUP ISSUE • 0.1D";
+ }
+}
+$("start").onclick=()=>{
+ if(!navigator.geolocation){ $("status").textContent="GPS NOT AVAILABLE"; return; }
+ if(watchId!==null) navigator.geolocation.clearWatch(watchId);
+ $("status").textContent="REQUESTING LOCATION…";
+
+ watchId=navigator.geolocation.watchPosition(pos=>{
+   const c=pos.coords;
+   const pt={lat:c.latitude,lon:c.longitude,acc:c.accuracy,time:Date.now()};
+
+   // Prefer iPhone course while actually moving.
+   if(c.heading!=null && !Number.isNaN(c.heading) && (c.speed==null || c.speed>0.8)) course=c.heading;
+
+   const prev=trace[trace.length-1];
+   if(!prev || meters(prev.lat,prev.lon,pt.lat,pt.lon)>5){
+     trace.push(pt);
+     if(trace.length>8) trace.shift();
+   }
+
+   // Heading fallback from the GPS trace.
+   if(course==null && trace.length>=2){
+     const a=trace[0], z=trace[trace.length-1];
+     if(meters(a.lat,a.lon,z.lat,z.lon)>12) course=bearing(a.lat,a.lon,z.lat,z.lon);
+   }
+
+   const now=Date.now();
+   if(now-lastQuery>=3000){
+     lastQuery=now;
+     refresh(pt.lat,pt.lon,c.accuracy);
+   }
+ },err=>{
+   $("status").textContent=err.code===1?"LOCATION DENIED":"GPS ERROR";
+ },{enableHighAccuracy:true,maximumAge:1000,timeout:15000});
+};
+
+$("mirror").onclick=()=>{
+ mirrored=!mirrored;
+ hud.style.transform=mirrored?"scaleX(-1)":"none";
+};
+$("gear").onclick=()=>setup.style.display="flex";
+</script>
+</body>
+</html>
