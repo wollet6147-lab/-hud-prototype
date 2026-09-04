@@ -3,106 +3,138 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#000000">
-<title>HUD Prototype 0.1A</title>
+<title>Patrol HUD 0.1B</title>
 <style>
+*{box-sizing:border-box}
 html,body{margin:0;width:100%;height:100%;background:#000;color:#fff;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
-#hud{width:100vw;height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;transform:scaleX(-1)}
-.street{font-size:clamp(40px,11vw,84px);font-weight:850;letter-spacing:.025em;line-height:1}
-.block{font-size:clamp(26px,7vw,52px);font-weight:750;margin-top:14px}
-.status{font-size:clamp(15px,4vw,26px);font-weight:600;margin-top:42px;opacity:.72}
-#panel{position:fixed;left:10px;right:10px;bottom:max(10px,env(safe-area-inset-bottom));display:flex;gap:8px;justify-content:center;align-items:center;opacity:.9}
-button,input{font-size:14px;border-radius:9px;border:1px solid #666;background:#111;color:#ddd;padding:9px}
-input{width:180px}
-.small{font-size:11px;position:fixed;top:max(8px,env(safe-area-inset-top));left:10px;color:#777}
+#hud{width:100vw;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;transform:scaleX(-1)}
+#street{font-size:clamp(40px,10vw,86px);font-weight:850;line-height:.98;letter-spacing:-1px}
+#block{font-size:clamp(26px,6.5vw,52px);font-weight:760;margin-top:18px}
+#next{font-size:clamp(21px,5.2vw,42px);font-weight:760;margin-top:48px}
+#status{font-size:clamp(12px,3vw,17px);font-weight:600;margin-top:22px;opacity:.55}
+#setup{position:fixed;left:12px;right:12px;bottom:max(14px,env(safe-area-inset-bottom));display:flex;gap:8px;align-items:center;justify-content:center;z-index:4}
+input,button{border:1px solid #666;border-radius:12px;background:#111;color:#ddd;padding:11px;font-size:14px}
+input{min-width:0;width:210px}
+#gear{position:fixed;top:max(8px,env(safe-area-inset-top));right:8px;border:0;background:transparent;color:#444;font-size:22px;z-index:5}
 @media(orientation:landscape){
-.street{font-size:13vh}.block{font-size:8vh}.status{font-size:4.5vh;margin-top:24px}
+ #street{font-size:14vh} #block{font-size:8vh;margin-top:8px}
+ #next{font-size:6vh;margin-top:25px} #status{margin-top:12px}
 }
 </style>
 </head>
 <body>
-<div class="small">0.1A LIVE GPS TEST</div>
 <div id="hud">
-  <div class="street" id="street">READY</div>
-  <div class="block" id="block">LIVE LOCATION</div>
-  <div class="status" id="status">ENTER MAPBOX PUBLIC TOKEN BELOW</div>
+ <div id="street">READY</div>
+ <div id="block">LIVE LOCATION</div>
+ <div id="next">NEXT: —</div>
+ <div id="status">0.1B • PARKED TEST FIRST</div>
 </div>
-<div id="panel">
-  <input id="token" placeholder="pk. Mapbox public token">
-  <button id="start">ENABLE LOCATION</button>
-  <button id="mirror">MIRROR</button>
+
+<div id="setup">
+ <input id="token" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="pk. Mapbox public token">
+ <button id="start">ENABLE LOCATION</button>
+ <button id="mirror">MIRROR</button>
 </div>
+<button id="gear" aria-label="Show controls">⚙︎</button>
+
 <script>
-let watchId=null, mirrored=true, lastLookup=0, lastLat=null, lastLon=null;
-const streetEl=document.getElementById('street');
-const blockEl=document.getElementById('block');
-const statusEl=document.getElementById('status');
-const tokenEl=document.getElementById('token');
-const hud=document.getElementById('hud');
+const $=id=>document.getElementById(id);
+const hud=$("hud"), setup=$("setup");
+let watchId=null, mirrored=true, lastLookup=0, lastLat=null, lastLon=null, course=null;
+let points=[];
 
-const saved=localStorage.getItem('mapbox_public_token');
-if(saved) tokenEl.value=saved;
+const saved=localStorage.getItem("mapbox_public_token");
+if(saved) $("token").value=saved;
 
-function distMeters(a,b,c,d){
- const R=6371000, p=Math.PI/180;
+function distanceM(a,b,c,d){
+ const R=6371000,p=Math.PI/180;
  const x=(d-b)*p*Math.cos((a+c)/2*p), y=(c-a)*p;
  return Math.sqrt(x*x+y*y)*R;
 }
-function normalizeStreet(s){ return (s||'').toUpperCase(); }
-function blockFromNumber(n){
- const m=String(n||'').match(/\d+/);
- if(!m) return '';
- const num=parseInt(m[0],10);
- return Math.floor(num/100)*100 + ' BLOCK';
+function bearing(a,b,c,d){
+ const p=Math.PI/180, y=Math.sin((d-b)*p)*Math.cos(c*p);
+ const x=Math.cos(a*p)*Math.sin(c*p)-Math.sin(a*p)*Math.cos(c*p)*Math.cos((d-b)*p);
+ return (Math.atan2(y,x)/p+360)%360;
 }
-async function lookup(lat,lon,accuracy){
- const token=tokenEl.value.trim();
- if(!token.startsWith('pk.')){
-   statusEl.textContent='MAPBOX PUBLIC TOKEN NEEDED';
-   return;
+function blockOf(n){
+ const m=String(n||"").match(/\d+/);
+ return m ? (Math.floor(Number(m[0])/100)*100)+" BLOCK" : "";
+}
+function destination(lat,lon,b,meters){
+ const R=6371000, d=meters/R, br=b*Math.PI/180, p1=lat*Math.PI/180, l1=lon*Math.PI/180;
+ const p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(br));
+ const l2=l1+Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));
+ return [l2*180/Math.PI,p2*180/Math.PI];
+}
+async function reverse(lat,lon,t){
+ const u=`https://api.mapbox.com/search/geocode/v6/reverse?longitude=${lon}&latitude=${lat}&country=us&types=address&limit=1&access_token=${encodeURIComponent(t)}`;
+ const r=await fetch(u); if(!r.ok) throw new Error("reverse");
+ const j=await r.json(), f=j.features?.[0], p=f?.properties||{}, c=p.context||{};
+ return {street:(c.street?.name||p.name||"").toUpperCase(), number:c.address?.address_number||p.address_number||""};
+}
+async function nextRoad(lat,lon,h,t,current){
+ if(h==null) return null;
+ const end=destination(lat,lon,h,1200);
+ const u=`https://api.mapbox.com/directions/v5/mapbox/driving/${lon},${lat};${end[0]},${end[1]}?steps=true&overview=false&bearings=${Math.round(h)},60;&access_token=${encodeURIComponent(t)}`;
+ const r=await fetch(u); if(!r.ok) throw new Error("directions");
+ const j=await r.json(), steps=j.routes?.[0]?.legs?.[0]?.steps||[];
+ // Experimental 0.1B: first named road change/maneuver ahead.
+ for(const s of steps){
+   const name=(s.name||"").trim().toUpperCase();
+   const q=s.maneuver?.location;
+   if(name && name!==current && q){
+     const d=distanceM(lat,lon,q[1],q[0]);
+     if(d>20) return {name,d};
+   }
  }
- localStorage.setItem('mapbox_public_token',token);
- statusEl.textContent='LOCATING… ±'+Math.round(accuracy)+' FT';
+ return null;
+}
+async function refresh(lat,lon,accuracy){
+ const t=$("token").value.trim();
+ if(!t.startsWith("pk.")){ $("status").textContent="MAPBOX PUBLIC TOKEN NEEDED"; return; }
+ localStorage.setItem("mapbox_public_token",t);
  try{
-   const url=`https://api.mapbox.com/search/geocode/v6/reverse?longitude=${lon}&latitude=${lat}&country=us&types=address&limit=1&access_token=${encodeURIComponent(token)}`;
-   const r=await fetch(url);
-   if(!r.ok) throw new Error('Map lookup '+r.status);
-   const j=await r.json();
-   const f=j.features && j.features[0];
-   if(!f){ streetEl.textContent='STREET UNKNOWN'; blockEl.textContent=''; statusEl.textContent='NO ADDRESS MATCH'; return; }
-   const p=f.properties||{};
-   const ctx=p.context||{};
-   const street=(ctx.street && ctx.street.name) || p.name || '';
-   const number=(ctx.address && ctx.address.address_number) || p.address_number || '';
-   streetEl.textContent=normalizeStreet(street)||'STREET UNKNOWN';
-   blockEl.textContent=blockFromNumber(number);
-   statusEl.textContent=blockEl.textContent ? 'LIVE • APPROXIMATE BLOCK' : 'LIVE • BLOCK UNAVAILABLE';
+   const here=await reverse(lat,lon,t);
+   $("street").textContent=here.street||"STREET UNKNOWN";
+   $("block").textContent=blockOf(here.number)||"BLOCK —";
+   const n=await nextRoad(lat,lon,course,t,here.street);
+   if(n){
+     const ft=n.d*3.28084;
+     $("next").textContent=`NEXT: ${n.name} • ${Math.max(50,Math.round(ft/50)*50)} FT`;
+   }else{
+     $("next").textContent=course==null ? "NEXT: START MOVING" : "NEXT: SEARCHING…";
+   }
+   $("status").textContent=`LIVE • GPS ±${Math.round(accuracy*3.28084)} FT • 0.1B`;
+   setup.style.display="none";
  }catch(e){
-   statusEl.textContent='LOOKUP ERROR';
+   $("status").textContent="DATA LOOKUP ERROR • TAP ⚙︎";
  }
 }
-document.getElementById('start').onclick=()=>{
- if(!navigator.geolocation){ statusEl.textContent='GPS NOT AVAILABLE'; return; }
+$("start").onclick=()=>{
+ if(!navigator.geolocation){$("status").textContent="GPS NOT AVAILABLE";return}
  if(watchId!==null) navigator.geolocation.clearWatch(watchId);
- statusEl.textContent='REQUESTING LOCATION…';
+ $("status").textContent="REQUESTING LOCATION…";
  watchId=navigator.geolocation.watchPosition(pos=>{
-   const {latitude:lat,longitude:lon,accuracy}=pos.coords;
-   const now=Date.now();
-   const moved=(lastLat===null)?999:distMeters(lastLat,lastLon,lat,lon);
-   if(now-lastLookup>5000 || moved>20){
-     lastLookup=now; lastLat=lat; lastLon=lon;
-     lookup(lat,lon,accuracy*3.28084);
+   const c=pos.coords, lat=c.latitude, lon=c.longitude;
+   // iOS heading is often null while stationary. Prefer GPS heading when supplied;
+   // otherwise infer course after meaningful movement.
+   if(c.heading!=null && !Number.isNaN(c.heading) && (c.speed==null || c.speed>0.8)) course=c.heading;
+   points.push([lat,lon]); if(points.length>3) points.shift();
+   if(course==null && points.length>=2){
+     const a=points[0], z=points[points.length-1];
+     if(distanceM(a[0],a[1],z[0],z[1])>12) course=bearing(a[0],a[1],z[0],z[1]);
+   }
+   const now=Date.now(), moved=lastLat==null?999:distanceM(lastLat,lastLon,lat,lon);
+   if(now-lastLookup>4000 || moved>15){
+     lastLookup=now; lastLat=lat; lastLon=lon; refresh(lat,lon,c.accuracy);
    }
  },err=>{
-   statusEl.textContent=err.code===1?'LOCATION PERMISSION DENIED':'GPS ERROR';
- },{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
+   $("status").textContent=err.code===1?"LOCATION PERMISSION DENIED":"GPS ERROR";
+ },{enableHighAccuracy:true,maximumAge:1000,timeout:15000});
 };
-document.getElementById('mirror').onclick=()=>{
- mirrored=!mirrored;
- hud.style.transform=mirrored?'scaleX(-1)':'none';
-};
+$("mirror").onclick=()=>{mirrored=!mirrored;hud.style.transform=mirrored?"scaleX(-1)":"none"};
+$("gear").onclick=()=>{setup.style.display="flex"};
 </script>
 </body>
 </html>
