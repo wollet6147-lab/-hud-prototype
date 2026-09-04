@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<title>HUD Prototype 0.1A</title>
+<style>
+html,body{margin:0;width:100%;height:100%;background:#000;color:#fff;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
+#hud{width:100vw;height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;transform:scaleX(-1)}
+.street{font-size:clamp(40px,11vw,84px);font-weight:850;letter-spacing:.025em;line-height:1}
+.block{font-size:clamp(26px,7vw,52px);font-weight:750;margin-top:14px}
+.status{font-size:clamp(15px,4vw,26px);font-weight:600;margin-top:42px;opacity:.72}
+#panel{position:fixed;left:10px;right:10px;bottom:max(10px,env(safe-area-inset-bottom));display:flex;gap:8px;justify-content:center;align-items:center;opacity:.9}
+button,input{font-size:14px;border-radius:9px;border:1px solid #666;background:#111;color:#ddd;padding:9px}
+input{width:180px}
+.small{font-size:11px;position:fixed;top:max(8px,env(safe-area-inset-top));left:10px;color:#777}
+@media(orientation:landscape){
+.street{font-size:13vh}.block{font-size:8vh}.status{font-size:4.5vh;margin-top:24px}
+}
+</style>
+</head>
+<body>
+<div class="small">0.1A LIVE GPS TEST</div>
+<div id="hud">
+  <div class="street" id="street">READY</div>
+  <div class="block" id="block">LIVE LOCATION</div>
+  <div class="status" id="status">ENTER MAPBOX PUBLIC TOKEN BELOW</div>
+</div>
+<div id="panel">
+  <input id="token" placeholder="pk. Mapbox public token">
+  <button id="start">ENABLE LOCATION</button>
+  <button id="mirror">MIRROR</button>
+</div>
+<script>
+let watchId=null, mirrored=true, lastLookup=0, lastLat=null, lastLon=null;
+const streetEl=document.getElementById('street');
+const blockEl=document.getElementById('block');
+const statusEl=document.getElementById('status');
+const tokenEl=document.getElementById('token');
+const hud=document.getElementById('hud');
+
+const saved=localStorage.getItem('mapbox_public_token');
+if(saved) tokenEl.value=saved;
+
+function distMeters(a,b,c,d){
+ const R=6371000, p=Math.PI/180;
+ const x=(d-b)*p*Math.cos((a+c)/2*p), y=(c-a)*p;
+ return Math.sqrt(x*x+y*y)*R;
+}
+function normalizeStreet(s){ return (s||'').toUpperCase(); }
+function blockFromNumber(n){
+ const m=String(n||'').match(/\d+/);
+ if(!m) return '';
+ const num=parseInt(m[0],10);
+ return Math.floor(num/100)*100 + ' BLOCK';
+}
+async function lookup(lat,lon,accuracy){
+ const token=tokenEl.value.trim();
+ if(!token.startsWith('pk.')){
+   statusEl.textContent='MAPBOX PUBLIC TOKEN NEEDED';
+   return;
+ }
+ localStorage.setItem('mapbox_public_token',token);
+ statusEl.textContent='LOCATING… ±'+Math.round(accuracy)+' FT';
+ try{
+   const url=`https://api.mapbox.com/search/geocode/v6/reverse?longitude=${lon}&latitude=${lat}&country=us&types=address&limit=1&access_token=${encodeURIComponent(token)}`;
+   const r=await fetch(url);
+   if(!r.ok) throw new Error('Map lookup '+r.status);
+   const j=await r.json();
+   const f=j.features && j.features[0];
+   if(!f){ streetEl.textContent='STREET UNKNOWN'; blockEl.textContent=''; statusEl.textContent='NO ADDRESS MATCH'; return; }
+   const p=f.properties||{};
+   const ctx=p.context||{};
+   const street=(ctx.street && ctx.street.name) || p.name || '';
+   const number=(ctx.address && ctx.address.address_number) || p.address_number || '';
+   streetEl.textContent=normalizeStreet(street)||'STREET UNKNOWN';
+   blockEl.textContent=blockFromNumber(number);
+   statusEl.textContent=blockEl.textContent ? 'LIVE • APPROXIMATE BLOCK' : 'LIVE • BLOCK UNAVAILABLE';
+ }catch(e){
+   statusEl.textContent='LOOKUP ERROR';
+ }
+}
+document.getElementById('start').onclick=()=>{
+ if(!navigator.geolocation){ statusEl.textContent='GPS NOT AVAILABLE'; return; }
+ if(watchId!==null) navigator.geolocation.clearWatch(watchId);
+ statusEl.textContent='REQUESTING LOCATION…';
+ watchId=navigator.geolocation.watchPosition(pos=>{
+   const {latitude:lat,longitude:lon,accuracy}=pos.coords;
+   const now=Date.now();
+   const moved=(lastLat===null)?999:distMeters(lastLat,lastLon,lat,lon);
+   if(now-lastLookup>5000 || moved>20){
+     lastLookup=now; lastLat=lat; lastLon=lon;
+     lookup(lat,lon,accuracy*3.28084);
+   }
+ },err=>{
+   statusEl.textContent=err.code===1?'LOCATION PERMISSION DENIED':'GPS ERROR';
+ },{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
+};
+document.getElementById('mirror').onclick=()=>{
+ mirrored=!mirrored;
+ hud.style.transform=mirrored?'scaleX(-1)':'none';
+};
+</script>
+</body>
+</html>
