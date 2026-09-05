@@ -1,0 +1,1026 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111">
+<title>F1rstHUD Ahead Lab 0.1</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;background:#0d0d0f;color:#e6e6e6;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+body{padding:8px 8px 40px}
+h1{font-size:14px;margin:0 0 8px;letter-spacing:.04em;font-family:-apple-system,sans-serif}
+.bar{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
+button,select,input{background:#1b1b1f;color:#ddd;border:1px solid #444;border-radius:6px;padding:6px 9px;font-size:12px;font-family:inherit}
+button:active{background:#2c2c33}
+button.on{background:#1d4a2b;border-color:#3a7a4d}
+button.warn{background:#4a2020;border-color:#7a3a3a}
+#token{flex:1;min-width:150px}
+canvas{width:100%;height:340px;background:#000;border:1px solid #333;border-radius:8px;display:block}
+.panel{border:1px solid #2a2a30;border-radius:8px;margin-top:8px;overflow:hidden}
+.panel>summary{padding:7px 9px;background:#17171b;cursor:pointer;font-size:12px;letter-spacing:.03em}
+.panel>div{padding:9px}
+pre{margin:0;white-space:pre-wrap;line-height:1.55;font-size:12px}
+table{border-collapse:collapse;width:100%;font-size:11.5px}
+td,th{border-bottom:1px solid #26262c;padding:3px 5px;text-align:left;vertical-align:top}
+th{color:#8a8a94;font-weight:600}
+.ok{color:#67d68a}.bad{color:#e2706e}.warnc{color:#e0b155}.dim{color:#7a7a84}
+.pgrid{display:grid;grid-template-columns:1fr 88px;gap:4px 8px;align-items:center}
+.pgrid label{font-size:11.5px;color:#a8a8b2}
+.pgrid input{padding:4px 6px;font-size:11.5px;width:100%}
+#kv{display:grid;grid-template-columns:132px 1fr;gap:2px 8px;font-size:12px}
+#kv .k{color:#8a8a94}
+</style>
+</head>
+<body>
+
+<h1>F1RSTHUD AHEAD LAB 0.1 — road-geometry proof of concept</h1>
+
+<div class="bar">
+  <input id="token" placeholder="pk. Mapbox public token" autocapitalize="off" autocomplete="off" spellcheck="false">
+  <button id="btnLive">START LIVE</button>
+  <button id="btnStop">STOP</button>
+</div>
+<div class="bar">
+  <button id="btnExport">EXPORT DRIVE</button>
+  <label for="fileIn" style="display:inline-block"><button id="btnLoadProxy" type="button">LOAD TRACE</button></label>
+  <input id="fileIn" type="file" accept=".json,application/json" style="display:none">
+  <button id="btnPlay">PLAY</button>
+  <button id="btnStep">STEP</button>
+  <button id="btnRestart">RESTART</button>
+  <select id="speed">
+    <option value="1">1x</option><option value="2">2x</option>
+    <option value="4" selected>4x</option><option value="8">8x</option>
+    <option value="0">MAX</option>
+  </select>
+  <button id="btnOrient">NORTH-UP</button>
+</div>
+
+<canvas id="cv"></canvas>
+
+<div class="panel" open><div id="kv"></div></div>
+
+<details class="panel" open>
+  <summary>CANDIDATES — selected and rejected, in physical order</summary>
+  <div><table id="cands"><tbody></tbody></table></div>
+</details>
+
+<details class="panel">
+  <summary>LAB PARAMETERS — experimental, not production constants</summary>
+  <div class="pgrid" id="params"></div>
+  <div style="margin-top:8px;display:flex;gap:5px">
+    <button id="btnResetP">RESET DEFAULTS</button>
+    <button id="btnRebuild">FORCE REBUILD GRAPH</button>
+  </div>
+</details>
+
+<details class="panel">
+  <summary>TILE INSPECTOR — what the data actually contains</summary>
+  <div><pre id="inspect" class="dim">Load tiles first.</pre></div>
+</details>
+
+<details class="panel">
+  <summary>EVENT LOG</summary>
+  <div><pre id="log" class="dim"></pre></div>
+</details>
+
+<script>
+"use strict";
+
+/* ==========================================================================
+   0. Lab parameters. Everything here is experimental. The field and replay
+      data decide these values, not the initial guesses.
+   ========================================================================== */
+const DEFAULTS = {
+  zoom:              15,     // vector tile zoom level
+  lruMax:            64,     // tiles retained in the LRU cache
+  stitchTol:         0.5,    // m — vertices closer than this become one node
+  snapMaxDist:       60,     // m — max perpendicular distance to consider an edge
+  wOffset:           1.0,    // snap cost per metre of offset
+  wBearing:          0.6,    // snap cost per degree of bearing disagreement
+  servicePenalty:    25,     // snap cost added for service/driveway classes
+  continuityBonus:   30,     // snap cost removed for staying on the previous edge
+  connectedBonus:    15,     // ...or moving to an edge connected to it
+  contAngle:         50,     // deg — max turn still counted as "same road ahead"
+  aliasAngle:        20,     // deg — within this of parallel/antiparallel = alias
+  chainMaxLen:       2000,   // m — how far forward to walk
+  junctionRadius:    60,     // m — junction point to ramp node association
+  dedupeStation:     5,      // m — merge candidates this close along the chain
+  onRoadOffset:      12,     // m — offset at or below this is evidence of ON_ROAD
+  offRoadOffset:     28,     // m — offset above this is evidence of OFF_ROAD
+  onRoadBearing:     45,     // deg — bearing agreement required for ON_ROAD
+  onRoadNeeded:      3,      // consecutive good fixes to enter ON_ROAD
+  offRoadNeeded:     4,      // consecutive bad fixes to enter OFF_ROAD
+  minSpeedCourse:    0.8,    // m/s — below this, GPS heading is not trusted
+  canvasRange:       400     // m — half-width of the debug canvas view
+};
+let P = Object.assign({}, DEFAULTS);
+
+// Road classes that can never be a legitimate NEXT. Editable at runtime.
+let EXCLUDED = ["service","driveway","parking_aisle","path","track","steps",
+                "pedestrian","construction","ferry","aerialway","golf","rail"];
+
+/* ==========================================================================
+   1. Minimal Mapbox Vector Tile decoder.
+      POC only — a production build would bundle a mature decoder locally.
+   ========================================================================== */
+class PBF {
+  constructor(buf){ this.b=buf; this.pos=0; this.len=buf.length; }
+  varint(){ let r=0,s=1,b; do{ b=this.b[this.pos++]; r+=(b&0x7f)*s; s*=128; }while(b>=0x80); return r; }
+  svarint(){ const n=this.varint(); return n%2 ? -(n+1)/2 : n/2; }
+  str(len){ const s=new TextDecoder("utf-8").decode(this.b.subarray(this.pos,this.pos+len)); this.pos+=len; return s; }
+  skip(wt){
+    if(wt===0){ let b; do{ b=this.b[this.pos++]; }while(b>=0x80); }
+    else if(wt===2){ this.pos += this.varint(); }
+    else if(wt===5){ this.pos+=4; }
+    else if(wt===1){ this.pos+=8; }
+    else throw new Error("wire type "+wt);
+  }
+  f32(){ const v=new DataView(this.b.buffer,this.b.byteOffset+this.pos,4).getFloat32(0,true); this.pos+=4; return v; }
+  f64(){ const v=new DataView(this.b.buffer,this.b.byteOffset+this.pos,8).getFloat64(0,true); this.pos+=8; return v; }
+}
+function readValue(p,end){
+  let v=null;
+  while(p.pos<end){
+    const t=p.varint(), f=t>>3, wt=t&7;
+    if(f===1&&wt===2){ v=p.str(p.varint()); }
+    else if(f===2&&wt===5){ v=p.f32(); }
+    else if(f===3&&wt===1){ v=p.f64(); }
+    else if(f===4&&wt===0){ v=p.varint(); }
+    else if(f===5&&wt===0){ v=p.varint(); }
+    else if(f===6&&wt===0){ v=p.svarint(); }
+    else if(f===7&&wt===0){ v=p.varint()!==0; }
+    else p.skip(wt);
+  }
+  return v;
+}
+function decodeTile(buf){
+  const p=new PBF(buf), layers={};
+  while(p.pos<p.len){
+    const t=p.varint(), f=t>>3, wt=t&7;
+    if(f===3&&wt===2){
+      const end=p.pos+p.varint();
+      const L={name:"",extent:4096,keys:[],values:[],feats:[]};
+      while(p.pos<end){
+        const t2=p.varint(), f2=t2>>3, w2=t2&7;
+        if(f2===1&&w2===2) L.name=p.str(p.varint());
+        else if(f2===2&&w2===2){ const n=p.varint(); L.feats.push([p.pos,p.pos+n]); p.pos+=n; }
+        else if(f2===3&&w2===2) L.keys.push(p.str(p.varint()));
+        else if(f2===4&&w2===2){ const n=p.varint(); L.values.push(readValue(p,p.pos+n)); }
+        else if(f2===5&&w2===0) L.extent=p.varint();
+        else p.skip(w2);
+      }
+      p.pos=end;
+      layers[L.name]=parseLayer(p.b,L);
+    } else p.skip(wt);
+  }
+  return layers;
+}
+function parseLayer(buf,L){
+  const out={name:L.name,extent:L.extent,features:[]};
+  for(const [s,e] of L.feats){
+    const p=new PBF(buf); p.pos=s;
+    let id=null,tags=[],type=0,geomRaw=null;
+    while(p.pos<e){
+      const t=p.varint(), f=t>>3, wt=t&7;
+      if(f===1&&wt===0) id=p.varint();
+      else if(f===2&&wt===2){ const end=p.pos+p.varint(); while(p.pos<end) tags.push(p.varint()); }
+      else if(f===2&&wt===0) tags.push(p.varint());
+      else if(f===3&&wt===0) type=p.varint();
+      else if(f===4&&wt===2){ const end=p.pos+p.varint(); const a=[]; while(p.pos<end) a.push(p.varint()); geomRaw=a; }
+      else p.skip(wt);
+    }
+    const props={};
+    for(let i=0;i+1<tags.length;i+=2) props[L.keys[tags[i]]] = L.values[tags[i+1]];
+    out.features.push({id,type,props,geom:decodeGeom(geomRaw||[])});
+  }
+  return out;
+}
+function decodeGeom(a){
+  const zz = n => (n>>1) ^ (-(n&1));
+  const lines=[]; let cur=null,x=0,y=0,i=0;
+  while(i<a.length){
+    const cmd=a[i++], op=cmd&7, count=cmd>>3;
+    if(op===1){                       // MoveTo
+      for(let c=0;c<count;c++){
+        x+=zz(a[i++]); y+=zz(a[i++]);
+        if(cur&&cur.length>1) lines.push(cur);
+        cur=[[x,y]];
+      }
+    } else if(op===2){                // LineTo
+      for(let c=0;c<count;c++){ x+=zz(a[i++]); y+=zz(a[i++]); cur.push([x,y]); }
+    } else if(op===7){                // ClosePath — polygons unused here
+      if(cur&&cur.length>1){ cur.push(cur[0].slice()); }
+    }
+  }
+  if(cur&&cur.length>=1) lines.push(cur);
+  return lines;
+}
+
+/* ==========================================================================
+   2. Projection. Tile coords -> lon/lat -> local ENU metres.
+      Origin is fixed at the first fix so all downstream maths is planar.
+   ========================================================================== */
+let ORIGIN=null, MPD_LAT=0, MPD_LON=0;
+function setOrigin(lat,lon){
+  const f=lat*Math.PI/180;
+  MPD_LAT = 111132.92 - 559.82*Math.cos(2*f) + 1.175*Math.cos(4*f);
+  MPD_LON = 111412.84*Math.cos(f) - 93.5*Math.cos(3*f);
+  ORIGIN={lat,lon};
+}
+const toXY = (lat,lon)=>[ (lon-ORIGIN.lon)*MPD_LON, (lat-ORIGIN.lat)*MPD_LAT ];
+const toLL = (x,y)=>[ ORIGIN.lat + y/MPD_LAT, ORIGIN.lon + x/MPD_LON ];
+function tilePointToLL(tx,ty,z,px,py,extent){
+  const n=Math.pow(2,z);
+  const lon=((tx+px/extent)/n)*360-180;
+  const q=Math.PI-2*Math.PI*(ty+py/extent)/n;
+  const lat=180/Math.PI*Math.atan(0.5*(Math.exp(q)-Math.exp(-q)));
+  return [lat,lon];
+}
+const lon2tx=(lon,z)=>Math.floor((lon+180)/360*Math.pow(2,z));
+const lat2ty=(lat,z)=>{ const f=lat*Math.PI/180;
+  return Math.floor((1-Math.log(Math.tan(f)+1/Math.cos(f))/Math.PI)/2*Math.pow(2,z)); };
+
+/* ==========================================================================
+   3. Plane geometry helpers
+   ========================================================================== */
+const brg = (dx,dy)=>(Math.atan2(dx,dy)*180/Math.PI+360)%360;   // 0 = north
+const angDiff = (a,b)=>((a-b+540)%360)-180;                      // -180..180
+const absDiff = (a,b)=>Math.abs(angDiff(a,b));
+function projToSeg(px,py,ax,ay,bx,by){
+  const dx=bx-ax, dy=by-ay, L2=dx*dx+dy*dy;
+  let t = L2>0 ? ((px-ax)*dx+(py-ay)*dy)/L2 : 0;
+  t=Math.max(0,Math.min(1,t));
+  const qx=ax+dx*t, qy=ay+dy*t;
+  return {t,qx,qy,d:Math.hypot(px-qx,py-qy)};
+}
+function segCross(a,b,c,d){
+  const r=[b[0]-a[0],b[1]-a[1]], s=[d[0]-c[0],d[1]-c[1]];
+  const den=r[0]*s[1]-r[1]*s[0];
+  if(Math.abs(den)<1e-12) return null;
+  const t=((c[0]-a[0])*s[1]-(c[1]-a[1])*s[0])/den;
+  const u=((c[0]-a[0])*r[1]-(c[1]-a[1])*r[0])/den;
+  if(t<0||t>1||u<0||u>1) return null;
+  return {x:a[0]+r[0]*t, y:a[1]+r[1]*t, t, u};
+}
+
+/* ==========================================================================
+   4. Tile cache (real LRU) and counters
+   ========================================================================== */
+const TILES=new Map();          // key -> {layers} ; Map preserves insertion order
+const CTR={net:0,tile:0,hit:0,miss:0,fail:0,startedAt:0};
+function lruGet(k){ if(!TILES.has(k)) return null; const v=TILES.get(k); TILES.delete(k); TILES.set(k,v); return v; }
+function lruPut(k,v){ if(TILES.has(k)) TILES.delete(k); TILES.set(k,v);
+  while(TILES.size>P.lruMax){ TILES.delete(TILES.keys().next().value); } }
+
+const inflight=new Map();
+async function getTile(z,x,y){
+  const k=z+"/"+x+"/"+y;
+  const hit=lruGet(k); if(hit){ CTR.hit++; return hit; }
+  if(inflight.has(k)) return inflight.get(k);
+  CTR.miss++;
+  const tok=document.getElementById("token").value.trim();
+  const url=`https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/${z}/${x}/${y}.vector.pbf?access_token=${encodeURIComponent(tok)}`;
+  const pr=(async()=>{
+    CTR.net++; CTR.tile++;
+    try{
+      const r=await fetch(url);
+      if(r.status===404){ const empty={__empty:true}; lruPut(k,empty); return empty; }
+      if(!r.ok){ CTR.fail++; log("tile "+k+" HTTP "+r.status); return {__empty:true}; }
+      const buf=new Uint8Array(await r.arrayBuffer());
+      const layers=decodeTile(buf);
+      lruPut(k,layers);
+      return layers;
+    }catch(e){ CTR.fail++; log("tile "+k+" "+e.message); return {__empty:true}; }
+    finally{ inflight.delete(k); }
+  })();
+  inflight.set(k,pr);
+  return pr;
+}
+
+/* ==========================================================================
+   5. Graph construction from a tile neighbourhood
+   ========================================================================== */
+let GRAPH=null, GRAPH_KEY="";
+const INSPECT={cls:{},type:{},structure:{},layer:{},oneway:{},sample:null,jsample:null};
+
+function tally(o,v){ const k=String(v); o[k]=(o[k]||0)+1; }
+
+async function ensureGraph(lat,lon,force){
+  const z=P.zoom|0, tx=lon2tx(lon,z), ty=lat2ty(lat,z), R=1;
+  const keys=[];
+  for(let dx=-R;dx<=R;dx++) for(let dy=-R;dy<=R;dy++) keys.push([z,tx+dx,ty+dy]);
+  const label=keys.map(k=>k.join("/")).sort().join(",");
+  if(!force && label===GRAPH_KEY && GRAPH) return GRAPH;
+  const tiles=await Promise.all(keys.map(k=>getTile(k[0],k[1],k[2])));
+  GRAPH=buildGraph(keys,tiles,z);
+  GRAPH_KEY=label;
+  log("graph rebuilt: "+GRAPH.edges.length+" edges, "+GRAPH.nodes.length+" nodes, "+GRAPH.junctions.length+" junctions");
+  return GRAPH;
+}
+
+function buildGraph(keys,tiles,z){
+  const edges=[], nodes=[], junctions=[];
+  const cellSize=P.stitchTol;
+  const nodeCells=new Map();
+  const seen=new Set();
+
+  function nodeAt(x,y){
+    const ci=Math.round(x/cellSize), cj=Math.round(y/cellSize);
+    for(let a=-1;a<=1;a++) for(let b=-1;b<=1;b++){
+      const arr=nodeCells.get((ci+a)+":"+(cj+b));
+      if(!arr) continue;
+      for(const id of arr){
+        const n=nodes[id];
+        if(Math.hypot(n.x-x,n.y-y)<=cellSize) return id;
+      }
+    }
+    const id=nodes.length;
+    nodes.push({x,y,edges:[]});
+    const key=ci+":"+cj;
+    if(!nodeCells.has(key)) nodeCells.set(key,[]);
+    nodeCells.get(key).push(id);
+    return id;
+  }
+
+  for(let i=0;i<keys.length;i++){
+    const [tz,tx,ty]=keys[i], layers=tiles[i];
+    if(!layers||layers.__empty) continue;
+
+    const road=layers.road;
+    if(road) for(const f of road.features){
+      if(f.type!==2) continue;
+      const p=f.props||{};
+      tally(INSPECT.cls,p.class); tally(INSPECT.type,p.type);
+      tally(INSPECT.structure,p.structure); tally(INSPECT.layer,p.layer);
+      tally(INSPECT.oneway,p.oneway);
+      if(!INSPECT.sample) INSPECT.sample=p;
+      for(const line of f.geom){
+        if(line.length<2) continue;
+        const pts=[];
+        for(const [gx,gy] of line){
+          const [la,lo]=tilePointToLL(tx,ty,tz,gx,gy,road.extent);
+          pts.push(toXY(la,lo));
+        }
+        // drop far-out-of-buffer duplication and degenerate geometry
+        let len=0; const cum=[0];
+        for(let k=1;k<pts.length;k++){ len+=Math.hypot(pts[k][0]-pts[k-1][0],pts[k][1]-pts[k-1][1]); cum.push(len); }
+        if(len<1) continue;
+        const r1=v=>Math.round(v);
+        const dk=[p.class,p.name||"",r1(pts[0][0]),r1(pts[0][1]),
+                  r1(pts[pts.length-1][0]),r1(pts[pts.length-1][1]),r1(len)].join("|");
+        if(seen.has(dk)) continue;
+        seen.add(dk);
+        const e={
+          id:edges.length, pts, cum, len,
+          name:String(p.name||""), ref:String(p.ref||""),
+          cls:String(p.class||"").toLowerCase(), type:String(p.type||"").toLowerCase(),
+          structure:String(p.structure||"none").toLowerCase(),
+          layer:Number.isFinite(+p.layer)?+p.layer:0,
+          oneway:String(p.oneway||"false").toLowerCase()==="true"
+        };
+        e.n0=nodeAt(pts[0][0],pts[0][1]);
+        e.n1=nodeAt(pts[pts.length-1][0],pts[pts.length-1][1]);
+        nodes[e.n0].edges.push(e.id);
+        if(e.n1!==e.n0) nodes[e.n1].edges.push(e.id);
+        edges.push(e);
+      }
+    }
+
+    const mj=layers.motorway_junction;
+    if(mj) for(const f of mj.features){
+      if(f.type!==1) continue;
+      const p=f.props||{};
+      if(!INSPECT.jsample) INSPECT.jsample=p;
+      for(const line of f.geom) for(const [gx,gy] of line){
+        const [la,lo]=tilePointToLL(tx,ty,tz,gx,gy,mj.extent);
+        const [x,y]=toXY(la,lo);
+        junctions.push({x,y,ref:String(p.ref||"").trim(),name:String(p.name||"").trim()});
+      }
+    }
+  }
+
+  // uniform grid over segments for fast geometric intersection queries
+  const GRID=new Map(), GS=50;
+  const gk=(i,j)=>i+":"+j;
+  for(const e of edges){
+    for(let i=1;i<e.pts.length;i++){
+      const a=e.pts[i-1], b=e.pts[i];
+      const i0=Math.floor(Math.min(a[0],b[0])/GS), i1=Math.floor(Math.max(a[0],b[0])/GS);
+      const j0=Math.floor(Math.min(a[1],b[1])/GS), j1=Math.floor(Math.max(a[1],b[1])/GS);
+      for(let ii=i0;ii<=i1;ii++) for(let jj=j0;jj<=j1;jj++){
+        const k=gk(ii,jj);
+        if(!GRID.has(k)) GRID.set(k,[]);
+        GRID.get(k).push([e.id,i]);
+      }
+    }
+  }
+  return {edges,nodes,junctions,GRID,GS};
+}
+
+/* ==========================================================================
+   6. Snapping — physical identity, never the name
+   ========================================================================== */
+function snap(g,x,y,course,acc,prevSnap){
+  const cands=[];
+  for(const e of g.edges){
+    let best=null;
+    for(let i=1;i<e.pts.length;i++){
+      const a=e.pts[i-1], b=e.pts[i];
+      if(Math.min(a[0],b[0])-P.snapMaxDist>x || Math.max(a[0],b[0])+P.snapMaxDist<x) continue;
+      if(Math.min(a[1],b[1])-P.snapMaxDist>y || Math.max(a[1],b[1])+P.snapMaxDist<y) continue;
+      const pr=projToSeg(x,y,a[0],a[1],b[0],b[1]);
+      if(!best||pr.d<best.d) best={...pr,i};
+    }
+    if(!best||best.d>P.snapMaxDist) continue;
+    const a=e.pts[best.i-1], b=e.pts[best.i];
+    const segB=brg(b[0]-a[0],b[1]-a[1]);
+    let dir=1, bd;
+    if(course==null){ bd=0; }
+    else {
+      const d0=absDiff(course,segB);
+      if(e.oneway){ dir=1; bd=d0; }
+      else if(d0<=90){ dir=1; bd=d0; }
+      else { dir=-1; bd=180-d0; }
+    }
+    const tol=Math.max(P.onRoadOffset, (acc||10)*1.2);
+    let cost = P.wOffset*best.d*(best.d>tol?2:1) + P.wBearing*bd;
+    if(EXCLUDED.includes(e.cls)) cost += P.servicePenalty;
+    if(prevSnap){
+      if(prevSnap.edgeId===e.id) cost -= P.continuityBonus;
+      else if(prevSnap.nodeSet && (prevSnap.nodeSet.has(e.n0)||prevSnap.nodeSet.has(e.n1))) cost -= P.connectedBonus;
+    }
+    cands.push({edge:e,edgeId:e.id,d:best.d,px:best.qx,py:best.qy,segIndex:best.i,
+                t:best.t,segBearing:segB,dir,bearingDelta:bd,cost});
+  }
+  cands.sort((a,b)=>a.cost-b.cost);
+  const s=cands[0]||null;
+  if(s){
+    const e=s.edge;
+    s.station0 = e.cum[s.segIndex-1] + s.t*(e.cum[s.segIndex]-e.cum[s.segIndex-1]);
+    s.nodeSet = new Set([e.n0,e.n1]);
+    s.roadBearing = s.dir===1 ? s.segBearing : (s.segBearing+180)%360;
+  }
+  return {best:s, alternatives:cands.slice(1,4)};
+}
+
+/* ==========================================================================
+   7. Forward chain — walk the actual road we are on
+   ========================================================================== */
+function buildChain(g,s){
+  const pts=[[s.px,s.py]], meta=[];        // meta[i] = edge id of segment i
+  const chainNodes=[];                      // {node, station, arriveEdge, contEdge}
+  let station=0, edge=s.edge, dir=s.dir, guard=0;
+  let idx = dir===1 ? s.segIndex : s.segIndex-1;
+  const edgesUsed=[{edge,dir}];
+  const visited=new Set([edge.id]);
+
+  while(guard++<200){
+    // emit the remainder of this edge in the direction of travel
+    if(dir===1){
+      for(let i=idx;i<edge.pts.length;i++){
+        const prev=pts[pts.length-1], p=edge.pts[i];
+        station+=Math.hypot(p[0]-prev[0],p[1]-prev[1]);
+        pts.push(p); meta.push(edge.id);
+        if(station>P.chainMaxLen) return finish();
+      }
+    } else {
+      for(let i=idx;i>=0;i--){
+        const prev=pts[pts.length-1], p=edge.pts[i];
+        station+=Math.hypot(p[0]-prev[0],p[1]-prev[1]);
+        pts.push(p); meta.push(edge.id);
+        if(station>P.chainMaxLen) return finish();
+      }
+    }
+    const endNode = dir===1 ? edge.n1 : edge.n0;
+    // incoming bearing at the terminal vertex
+    const n=pts.length;
+    const inB = brg(pts[n-1][0]-pts[n-2][0], pts[n-1][1]-pts[n-2][1]);
+
+    // pick the continuation: smallest turn
+    let bestE=null,bestTurn=999,bestDir=1;
+    const incident=[];
+    for(const eid of g.nodes[endNode].edges){
+      if(eid===edge.id) continue;
+      const e2=g.edges[eid];
+      let d2, outB;
+      if(e2.n0===endNode){ d2=1; outB=brg(e2.pts[1][0]-e2.pts[0][0], e2.pts[1][1]-e2.pts[0][1]); }
+      else { d2=-1; const L=e2.pts.length;
+             outB=brg(e2.pts[L-2][0]-e2.pts[L-1][0], e2.pts[L-2][1]-e2.pts[L-1][1]); }
+      const turn=absDiff(outB,inB);
+      incident.push({edge:e2,dir:d2,turn,outB});
+      if(turn<bestTurn && !visited.has(eid)){ bestTurn=turn; bestE=e2; bestDir=d2; }
+    }
+    chainNodes.push({node:endNode,station,inB,incident,
+                     contEdgeId:(bestE&&bestTurn<=P.contAngle)?bestE.id:null});
+    if(!bestE || bestTurn>P.contAngle) return finish();
+    edge=bestE; dir=bestDir; visited.add(edge.id);
+    edgesUsed.push({edge,dir});
+    idx = dir===1 ? 1 : edge.pts.length-2;
+  }
+  return finish();
+
+  function finish(){
+    const cum=[0];
+    for(let i=1;i<pts.length;i++) cum.push(cum[i-1]+Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]));
+    return {pts,meta,cum,chainNodes,edgesUsed,length:cum[cum.length-1]};
+  }
+}
+function chainBearingAt(chain,station){
+  for(let i=1;i<chain.cum.length;i++){
+    if(chain.cum[i]>=station){
+      const a=chain.pts[i-1],b=chain.pts[i];
+      return brg(b[0]-a[0],b[1]-a[1]);
+    }
+  }
+  const n=chain.pts.length;
+  return brg(chain.pts[n-1][0]-chain.pts[n-2][0], chain.pts[n-1][1]-chain.pts[n-2][1]);
+}
+function chainPointAt(chain,station){
+  for(let i=1;i<chain.cum.length;i++){
+    if(chain.cum[i]>=station){
+      const f=(station-chain.cum[i-1])/Math.max(1e-6,chain.cum[i]-chain.cum[i-1]);
+      return [chain.pts[i-1][0]+(chain.pts[i][0]-chain.pts[i-1][0])*f,
+              chain.pts[i-1][1]+(chain.pts[i][1]-chain.pts[i-1][1])*f];
+    }
+  }
+  return chain.pts[chain.pts.length-1];
+}
+
+/* ==========================================================================
+   8. Candidate collection + filtering, with an explicit reason for every
+      rejection. Ordering is always by along-chain station.
+   ========================================================================== */
+function collectCandidates(g,chain,s,hwy){
+  const out=[];
+  const chainEdgeIds=new Set(chain.edgesUsed.map(e=>e.edge.id));
+  const contIds=new Set(chain.chainNodes.map(n=>n.contEdgeId).filter(Boolean));
+  const chainNodeIds=new Set(chain.chainNodes.map(n=>n.node));
+
+  // -- node-based candidates ------------------------------------------------
+  for(const cn of chain.chainNodes){
+    for(const inc of cn.incident){
+      const e=inc.edge;
+      const isCont = e.id===cn.contEdgeId;
+      out.push({
+        src:"node", edge:e, name:e.name||e.ref, cls:e.cls, station:cn.station,
+        turn:inc.turn, x:g.nodes[cn.node].x, y:g.nodes[cn.node].y,
+        sharesNode:true, isCont, edgeObj:e
+      });
+    }
+  }
+
+  // -- geometric candidates (clipped ways, unsplit crossings) ---------------
+  const tested=new Set();
+  for(let i=1;i<chain.pts.length;i++){
+    const a=chain.pts[i-1], b=chain.pts[i];
+    const i0=Math.floor(Math.min(a[0],b[0])/g.GS), i1=Math.floor(Math.max(a[0],b[0])/g.GS);
+    const j0=Math.floor(Math.min(a[1],b[1])/g.GS), j1=Math.floor(Math.max(a[1],b[1])/g.GS);
+    for(let ii=i0;ii<=i1;ii++) for(let jj=j0;jj<=j1;jj++){
+      const bucket=g.GRID.get(ii+":"+jj); if(!bucket) continue;
+      for(const [eid,si] of bucket){
+        if(chainEdgeIds.has(eid)) continue;
+        const tk=eid+"@"+si+"#"+i; if(tested.has(tk)) continue; tested.add(tk);
+        const e=g.edges[eid];
+        const c=e.pts[si-1], d=e.pts[si];
+        const X=segCross(a,b,c,d);
+        if(!X) continue;
+        const station=chain.cum[i-1]+Math.hypot(X.x-a[0],X.y-a[1]);
+        const shares = chainNodeIds.has(e.n0)||chainNodeIds.has(e.n1);
+        out.push({
+          src:"geom", edge:e, name:e.name||e.ref, cls:e.cls, station,
+          turn:absDiff(brg(d[0]-c[0],d[1]-c[1]), chainBearingAt(chain,station)),
+          x:X.x, y:X.y, sharesNode:shares, isCont:contIds.has(e.id), edgeObj:e
+        });
+      }
+    }
+  }
+
+  // -- dedupe by (edge, station) -------------------------------------------
+  out.sort((p,q)=>p.station-q.station);
+  const merged=[];
+  for(const c of out){
+    const dup=merged.find(m=>m.edge.id===c.edge.id && Math.abs(m.station-c.station)<P.dedupeStation);
+    if(!dup) merged.push(c);
+  }
+
+  // -- reasoning ------------------------------------------------------------
+  const chainLayer = s.edge.layer;
+  for(const c of merged){
+    const e=c.edgeObj;
+    const turn=c.turn;
+    if(c.station<=0.5)                          c.reason="behind vehicle";
+    else if(c.isCont)                           c.reason="continuation of current roadway";
+    else if(!c.name)                            c.reason="unnamed";
+    else if(EXCLUDED.includes(c.cls))           c.reason="excluded class: "+c.cls;
+    else if(hwy && c.cls!=="motorway_link")     c.reason="not a ramp (highway mode)";
+    else if(turn<P.aliasAngle)                  c.reason="alias — parallel ("+turn.toFixed(0)+"°)";
+    else if(Math.abs(180-turn)<P.aliasAngle)    c.reason="alias — antiparallel ("+turn.toFixed(0)+"°)";
+    else if(!c.sharesNode && e.layer!==chainLayer)
+                                                c.reason="grade separated (layer "+e.layer+" vs "+chainLayer+")";
+    else if(!c.sharesNode && (e.structure==="bridge"||e.structure==="tunnel"))
+                                                c.reason="grade separated ("+e.structure+", no shared node)";
+    else if(sameRoadway(e,s.edge))              c.reason="alias — shares name/ref with current roadway";
+    else                                        c.reason=null;
+  }
+  return merged;
+}
+function sameRoadway(a,b){
+  const n=v=>String(v||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+  if(a.ref&&b.ref&&n(a.ref)===n(b.ref)) return true;
+  if(a.name&&b.name&&n(a.name)===n(b.name)) return true;
+  return false;
+}
+
+/* ==========================================================================
+   9. Highway exits — stations on the same chain, so "passed" is a comparison
+   ========================================================================== */
+function collectExits(g,chain,s){
+  const out=[];
+  for(const cn of chain.chainNodes){
+    for(const inc of cn.incident){
+      const e=inc.edge;
+      if(e.id===cn.contEdgeId) continue;
+      const isLink = e.cls==="motorway_link";
+      const leavesHere = e.n0===cn.node;                    // ramp starts at this node
+      let label="", jd=Infinity;
+      for(const j of g.junctions){
+        const d=Math.hypot(j.x-g.nodes[cn.node].x, j.y-g.nodes[cn.node].y);
+        if(d<jd && d<=P.junctionRadius){ jd=d; label=j.ref?("EXIT "+j.ref+(j.name?" • "+j.name:"")):(j.name?("EXIT • "+j.name):""); }
+      }
+      const c={src:"node", edge:e, edgeObj:e, cls:e.cls, station:cn.station,
+               x:g.nodes[cn.node].x, y:g.nodes[cn.node].y, turn:inc.turn,
+               name: label || (e.name||e.ref||"RAMP"), junctionDist:jd};
+      if(!isLink)             c.reason="not a motorway_link ("+e.cls+")";
+      else if(!leavesHere)    c.reason="on-ramp — merges in, does not exit";
+      else if(c.station<=0.5) c.reason="behind vehicle";
+      else                    c.reason=null;
+      out.push(c);
+    }
+  }
+  out.sort((a,b)=>a.station-b.station);
+  return out;
+}
+
+/* ==========================================================================
+   10. Off-road state machine with hysteresis
+   ========================================================================== */
+const RS={state:"UNCERTAIN",good:0,bad:0};
+function roadState(s,acc,speed){
+  let good;
+  if(!s) good=false;
+  else {
+    const offOK = s.d <= Math.max(P.onRoadOffset,(acc||10)*1.2);
+    const brgOK = (speed==null||speed<P.minSpeedCourse) ? true : s.bearingDelta<=P.onRoadBearing;
+    good = offOK && brgOK;
+  }
+  const definitelyBad = !s || s.d>P.offRoadOffset;
+  if(good){ RS.good++; RS.bad=0; } else { RS.bad++; RS.good=0; }
+  if(RS.good>=P.onRoadNeeded) RS.state="ON_ROAD";
+  else if(RS.bad>=P.offRoadNeeded && definitelyBad) RS.state="OFF_ROAD";
+  else if(RS.bad>=P.offRoadNeeded) RS.state="UNCERTAIN";
+  else if(RS.state==="OFF_ROAD"&&RS.good>0) RS.state="UNCERTAIN";
+  return RS.state;
+}
+
+/* ==========================================================================
+   11. THE SHARED ENGINE. LIVE and REPLAY both call exactly this.
+   ========================================================================== */
+const ENGINE={prevSnap:null,prevFixes:[]};
+function deriveCourse(fix,prev){
+  if(fix.heading!=null && !Number.isNaN(fix.heading) &&
+     (fix.speed==null || fix.speed>P.minSpeedCourse)) return fix.heading;
+  for(let i=prev.length-1;i>=0;i--){
+    const p=prev[i];
+    const d=Math.hypot(...toXY(fix.lat,fix.lon).map((v,k)=>v-toXY(p.lat,p.lon)[k]));
+    if(d>12) return brg(...toXY(fix.lat,fix.lon).map((v,k)=>v-toXY(p.lat,p.lon)[k]));
+  }
+  return null;
+}
+async function step(fix){
+  if(!ORIGIN) setOrigin(fix.lat,fix.lon);
+  const t0=performance.now();
+  const course=deriveCourse(fix,ENGINE.prevFixes);
+  ENGINE.prevFixes.push(fix); if(ENGINE.prevFixes.length>10) ENGINE.prevFixes.shift();
+
+  const g=await ensureGraph(fix.lat,fix.lon,false);
+  const [x,y]=toXY(fix.lat,fix.lon);
+  const sn=snap(g,x,y,course,fix.acc,ENGINE.prevSnap);
+  const s=sn.best;
+  const state=roadState(s,fix.acc,fix.speed);
+
+  const D={fix,course,x,y,state,snap:s,alts:sn.alternatives,graph:g,
+           chain:null,candidates:[],selected:null,hwy:false,ms:0};
+
+  if(s && state!=="OFF_ROAD"){
+    ENGINE.prevSnap=s;
+    D.hwy = (s.edge.cls==="motorway");
+    D.chain=buildChain(g,s);
+    D.candidates = D.hwy ? collectExits(g,D.chain,s) : collectCandidates(g,D.chain,s,false);
+    D.selected = D.candidates.find(c=>c.reason===null) || null;
+  }
+  D.ms=performance.now()-t0;
+  return D;
+}
+
+/* ==========================================================================
+   12. Recording / export / replay
+   ========================================================================== */
+const REC={fixes:[],startedAt:0};
+let MODE="IDLE", watchId=null;
+const REPLAY={fixes:[],i:0,playing:false,timer:null,loaded:""};
+
+function recordFix(c,t){
+  REC.fixes.push({t:t||Date.now(),lat:c.latitude,lon:c.longitude,acc:c.accuracy,
+                  heading:(c.heading!=null&&!Number.isNaN(c.heading))?c.heading:null,
+                  speed:(c.speed!=null&&!Number.isNaN(c.speed))?c.speed:null});
+}
+function exportDrive(){
+  if(!REC.fixes.length){ alert("No fixes recorded yet."); return; }
+  const blob=new Blob([JSON.stringify({
+    format:"f1rsthud-ahead-lab-trace", version:1, app:"AheadLab 0.1",
+    startedAt:REC.startedAt, exportedAt:Date.now(),
+    params:P, excluded:EXCLUDED, fixCount:REC.fixes.length,
+    counters:{...CTR}, fixes:REC.fixes
+  },null,1)],{type:"application/json"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="aheadlab_drive_"+new Date().toISOString().replace(/[:.]/g,"-")+".json";
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+}
+function loadTrace(text,fname){
+  let j; try{ j=JSON.parse(text); }catch(e){ alert("Not valid JSON"); return; }
+  const fixes=Array.isArray(j)?j:j.fixes;
+  if(!Array.isArray(fixes)||!fixes.length){ alert("No fixes in file"); return; }
+  stopLive();
+  REPLAY.fixes=fixes; REPLAY.i=0; REPLAY.playing=false; REPLAY.loaded=fname||"trace";
+  MODE="REPLAY";
+  ENGINE.prevSnap=null; ENGINE.prevFixes=[]; ORIGIN=null; GRAPH=null; GRAPH_KEY="";
+  RS.state="UNCERTAIN"; RS.good=0; RS.bad=0;
+  log("loaded "+fixes.length+" fixes from "+REPLAY.loaded);
+  replayStep();
+}
+let busy=false;
+async function runFix(f){
+  if(busy) return; busy=true;
+  try{ const D=await step(f); render(D); }
+  catch(e){ log("engine error: "+e.message); console.error(e); }
+  finally{ busy=false; }
+}
+async function replayStep(){
+  if(REPLAY.i>=REPLAY.fixes.length){ REPLAY.playing=false; syncBtns(); return; }
+  const f=REPLAY.fixes[REPLAY.i++];
+  await runFix(f);
+}
+async function replayLoop(){
+  while(REPLAY.playing && REPLAY.i<REPLAY.fixes.length){
+    const a=REPLAY.fixes[REPLAY.i], b=REPLAY.fixes[REPLAY.i+1];
+    await replayStep();
+    const mult=+document.getElementById("speed").value;
+    if(mult>0 && a && b){
+      const dt=Math.min(2000,Math.max(0,(b.t-a.t)/mult));
+      await new Promise(r=>setTimeout(r,dt));
+    } else { await new Promise(r=>setTimeout(r,0)); }
+  }
+  REPLAY.playing=false; syncBtns();
+}
+function startLive(){
+  const tok=document.getElementById("token").value.trim();
+  if(!tok.startsWith("pk.")){ alert("Enter your pk. Mapbox public token first."); return; }
+  localStorage.setItem("mapbox_public_token",tok);
+  if(!navigator.geolocation){ alert("No geolocation"); return; }
+  if(!window.isSecureContext){ alert("Must be served over HTTPS"); return; }
+  MODE="LIVE"; REC.fixes=[]; REC.startedAt=Date.now(); CTR.startedAt=Date.now();
+  ENGINE.prevSnap=null; ENGINE.prevFixes=[]; ORIGIN=null; GRAPH=null; GRAPH_KEY="";
+  RS.state="UNCERTAIN"; RS.good=0; RS.bad=0;
+  if("wakeLock" in navigator) navigator.wakeLock.request("screen").catch(()=>{});
+  watchId=navigator.geolocation.watchPosition(pos=>{
+    recordFix(pos.coords,Date.now());
+    runFix(REC.fixes[REC.fixes.length-1]);
+  },err=>log("GPS error "+err.code+": "+err.message),
+    {enableHighAccuracy:true,maximumAge:1000,timeout:15000});
+  log("LIVE started"); syncBtns();
+}
+function stopLive(){
+  if(watchId!==null){ navigator.geolocation.clearWatch(watchId); watchId=null; log("LIVE stopped"); }
+  if(MODE==="LIVE") MODE="IDLE";
+  syncBtns();
+}
+
+/* ==========================================================================
+   13. Rendering — diagnostics, candidate table, canvas
+   ========================================================================== */
+const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
+let HEADING_UP=false;
+function fitCanvas(){
+  const r=cv.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
+  cv.width=r.width*dpr; cv.height=r.height*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener("resize",fitCanvas); fitCanvas();
+
+const CLSCOLOR={motorway:"#e0b155",motorway_link:"#c98f3a",trunk:"#d09a4a",primary:"#7fa7d8",
+  secondary:"#6f93bd",tertiary:"#5f7f9f",street:"#4d5f70",street_limited:"#465666",
+  service:"#33383f",driveway:"#2c3037",parking_aisle:"#2c3037",path:"#2a2f2a",track:"#2a2f2a"};
+
+function render(D){
+  const rate = CTR.startedAt ? (CTR.net/Math.max(1,(Date.now()-CTR.startedAt)/60000)) : 0;
+  const s=D.snap, sel=D.selected;
+  const kv=[
+    ["MODE", MODE + (MODE==="REPLAY" ? `  (${REPLAY.i}/${REPLAY.fixes.length})` : "")],
+    ["ROAD STATE", `<span class="${D.state==="ON_ROAD"?"ok":D.state==="OFF_ROAD"?"bad":"warnc"}">${D.state}</span>`],
+    ["SNAPPED ROAD", s ? (s.edge.name || s.edge.ref || "<unnamed>") : "<span class='bad'>none</span>"],
+    ["ROAD CLASS", s ? `${s.edge.cls}${s.edge.type&&s.edge.type!==s.edge.cls?" / "+s.edge.type:""}${s.edge.oneway?" · oneway":""}${s.edge.structure!=="none"?" · "+s.edge.structure:""} · layer ${s.edge.layer}` : "—"],
+    ["OFFSET", s ? s.d.toFixed(1)+" m" : "—"],
+    ["COURSE", D.course==null ? "—" : Math.round(D.course)+"°"],
+    ["ROAD BEARING", s ? Math.round(s.roadBearing)+"°" : "—"],
+    ["BEARING DELTA", s ? s.bearingDelta.toFixed(1)+"°" : "—"],
+    ["MODE (SURFACE)", D.hwy ? "HIGHWAY — next exit" : "SURFACE — next intersection"],
+    ["NEXT", sel ? `<b class="ok">${sel.name}</b>` : "<span class='bad'>—</span>"],
+    ["ALONG-ROAD DIST", sel ? Math.round(sel.station)+" m  ("+Math.round(sel.station*3.28084)+" ft)" : "—"],
+    ["CHAIN LENGTH", D.chain ? Math.round(D.chain.length)+" m over "+D.chain.edgesUsed.length+" segments" : "—"],
+    ["CANDIDATES", D.candidates.length + " found, " + D.candidates.filter(c=>!c.reason).length + " eligible"],
+    ["TILES LOADED", TILES.size + " cached / " + CTR.tile + " fetched"],
+    ["NEW TILE REQUESTS", String(CTR.miss)],
+    ["CACHE HIT / MISS", CTR.hit + " / " + CTR.miss + (CTR.fail?`  <span class="bad">${CTR.fail} failed</span>`:"")],
+    ["NETWORK REQUESTS", CTR.net + `  <span class="dim">(${rate.toFixed(1)}/min)</span>`],
+    ["GRAPH", D.graph ? `${D.graph.edges.length} edges · ${D.graph.nodes.length} nodes · ${D.graph.junctions.length} junctions` : "—"],
+    ["GPS", `±${(D.fix.acc||0).toFixed(0)} m · ${D.fix.speed==null?"—":(D.fix.speed*2.23694).toFixed(0)+" mph"}`],
+    ["ENGINE TIME", D.ms.toFixed(0)+" ms"],
+    ["REASON", s ? `snap cost ${s.cost.toFixed(1)}${D.alts.length?" · next best "+(D.alts[0].edge.name||D.alts[0].edge.cls)+" @"+D.alts[0].d.toFixed(0)+"m cost "+D.alts[0].cost.toFixed(1):""}` : "no edge within "+P.snapMaxDist+" m"]
+  ];
+  document.getElementById("kv").innerHTML =
+    kv.map(([k,v])=>`<div class="k">${k}</div><div>${v}</div>`).join("");
+
+  const rows=["<tr><th>#</th><th>station</th><th>name</th><th>class</th><th>turn</th><th>verdict</th></tr>"];
+  D.candidates.slice(0,18).forEach((c,i)=>{
+    const ok=!c.reason;
+    rows.push(`<tr>
+      <td class="dim">${c.src==="geom"?"g":"n"}${i}</td>
+      <td>${Math.round(c.station)}m</td>
+      <td class="${ok?"ok":""}">${c.name||"<i class='dim'>unnamed</i>"}</td>
+      <td class="dim">${c.cls}</td>
+      <td class="dim">${c.turn==null?"—":Math.round(c.turn)+"°"}</td>
+      <td class="${ok?"ok":"bad"}">${ok?"SELECTED":c.reason}</td></tr>`);
+  });
+  if(!D.candidates.length) rows.push(`<tr><td colspan="6" class="bad">no candidates — check snap and chain on the canvas</td></tr>`);
+  document.querySelector("#cands tbody").innerHTML=rows.join("");
+
+  drawCanvas(D);
+  updateInspector();
+}
+
+function drawCanvas(D){
+  const w=cv.clientWidth, h=cv.clientHeight;
+  ctx.clearRect(0,0,w,h);
+  if(!D.graph||!ORIGIN) return;
+  const cx=w/2, cy=h/2, scale=Math.min(w,h)/(2*P.canvasRange);
+  const rot = HEADING_UP && D.course!=null ? -D.course*Math.PI/180 : 0;
+  const cosR=Math.cos(rot), sinR=Math.sin(rot);
+  const T=(x,y)=>{ const dx=(x-D.x)*scale, dy=(y-D.y)*scale;
+                   return [cx + dx*cosR - dy*sinR, cy - (dx*sinR + dy*cosR)]; };
+
+  // road network
+  for(const e of D.graph.edges){
+    if(Math.hypot(e.pts[0][0]-D.x,e.pts[0][1]-D.y)>P.canvasRange*2 &&
+       Math.hypot(e.pts[e.pts.length-1][0]-D.x,e.pts[e.pts.length-1][1]-D.y)>P.canvasRange*2) continue;
+    ctx.beginPath();
+    e.pts.forEach((p,i)=>{ const [X,Y]=T(p[0],p[1]); i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); });
+    ctx.strokeStyle=CLSCOLOR[e.cls]||"#3a4048";
+    ctx.lineWidth=(e.cls==="motorway"?2.5:e.cls==="motorway_link"?2:1.2);
+    ctx.stroke();
+  }
+  // forward chain
+  if(D.chain){
+    ctx.beginPath();
+    D.chain.pts.forEach((p,i)=>{ const [X,Y]=T(p[0],p[1]); i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); });
+    ctx.strokeStyle="#3ad07a"; ctx.lineWidth=3.5; ctx.globalAlpha=.85; ctx.stroke(); ctx.globalAlpha=1;
+  }
+  // snapped edge
+  if(D.snap){
+    const e=D.snap.edge;
+    ctx.beginPath();
+    e.pts.forEach((p,i)=>{ const [X,Y]=T(p[0],p[1]); i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); });
+    ctx.strokeStyle="#8fd6ff"; ctx.lineWidth=2; ctx.stroke();
+    const [SX,SY]=T(D.snap.px,D.snap.py);
+    ctx.beginPath(); ctx.arc(SX,SY,3.5,0,7); ctx.fillStyle="#8fd6ff"; ctx.fill();
+  }
+  // candidates
+  for(const c of D.candidates.slice(0,18)){
+    if(c.x==null) continue;
+    const [X,Y]=T(c.x,c.y);
+    const ok=!c.reason;
+    ctx.beginPath(); ctx.arc(X,Y,ok?7:4,0,7);
+    ctx.fillStyle = ok ? "#3ad07a" : "#8a3f3f"; ctx.fill();
+    if(ok){ ctx.font="600 11px ui-monospace,monospace"; ctx.fillStyle="#cfeedd";
+            ctx.fillText(c.name,X+10,Y+4); }
+  }
+  // junctions
+  for(const j of D.graph.junctions){
+    if(Math.hypot(j.x-D.x,j.y-D.y)>P.canvasRange*1.6) continue;
+    const [X,Y]=T(j.x,j.y);
+    ctx.beginPath(); ctx.arc(X,Y,3,0,7); ctx.strokeStyle="#e0b155"; ctx.lineWidth=1.2; ctx.stroke();
+  }
+  // vehicle
+  const [VX,VY]=T(D.x,D.y);
+  ctx.beginPath(); ctx.arc(VX,VY,5,0,7);
+  ctx.fillStyle = D.state==="ON_ROAD"?"#fff":D.state==="OFF_ROAD"?"#e2706e":"#e0b155"; ctx.fill();
+  if(D.course!=null){
+    const a=(D.course*Math.PI/180)+rot;
+    ctx.beginPath(); ctx.moveTo(VX,VY);
+    ctx.lineTo(VX+Math.sin(a)*26, VY-Math.cos(a)*26);
+    ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.stroke();
+  }
+  // frame
+  ctx.font="11px ui-monospace,monospace"; ctx.fillStyle="#6a6a74";
+  ctx.fillText((HEADING_UP?"HEADING-UP":"NORTH-UP")+"  ±"+P.canvasRange+" m",8,14);
+  if(!HEADING_UP){ ctx.fillStyle="#8a8a94"; ctx.fillText("N",w-16,16);
+    ctx.beginPath(); ctx.moveTo(w-12,20); ctx.lineTo(w-12,34); ctx.strokeStyle="#8a8a94"; ctx.lineWidth=1; ctx.stroke(); }
+}
+
+function updateInspector(){
+  const fmt=o=>Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0,24)
+    .map(([k,v])=>`  ${String(k).padEnd(20)} ${v}`).join("\n") || "  (none)";
+  document.getElementById("inspect").textContent =
+    "road.class:\n"+fmt(INSPECT.cls)+
+    "\n\nroad.type:\n"+fmt(INSPECT.type)+
+    "\n\nroad.structure:\n"+fmt(INSPECT.structure)+
+    "\n\nroad.layer:\n"+fmt(INSPECT.layer)+
+    "\n\nroad.oneway:\n"+fmt(INSPECT.oneway)+
+    "\n\nsample road feature properties:\n"+JSON.stringify(INSPECT.sample||{},null,1)+
+    "\n\nsample motorway_junction properties:\n"+JSON.stringify(INSPECT.jsample||{},null,1);
+}
+
+const LOG=[];
+function log(m){ LOG.unshift(new Date().toLocaleTimeString()+"  "+m);
+  if(LOG.length>60) LOG.pop();
+  document.getElementById("log").textContent=LOG.join("\n"); }
+
+/* ==========================================================================
+   14. Parameter UI
+   ========================================================================== */
+function buildParams(){
+  const host=document.getElementById("params");
+  host.innerHTML="";
+  for(const k of Object.keys(DEFAULTS)){
+    const lab=document.createElement("label"); lab.textContent=k;
+    const inp=document.createElement("input");
+    inp.type="number"; inp.step="any"; inp.value=P[k];
+    inp.oninput=()=>{ const v=parseFloat(inp.value);
+      if(Number.isFinite(v)){ P[k]=v; if(k==="zoom"||k==="stitchTol"){ GRAPH_KEY=""; } } };
+    host.appendChild(lab); host.appendChild(inp);
+  }
+  const l2=document.createElement("label"); l2.textContent="excluded classes";
+  const i2=document.createElement("input"); i2.type="text"; i2.value=EXCLUDED.join(",");
+  i2.style.gridColumn="span 1";
+  i2.oninput=()=>{ EXCLUDED=i2.value.split(",").map(s=>s.trim().toLowerCase()).filter(Boolean); };
+  host.appendChild(l2); host.appendChild(i2);
+}
+buildParams();
+
+/* ==========================================================================
+   15. Wiring
+   ========================================================================== */
+const saved=localStorage.getItem("mapbox_public_token");
+if(saved) document.getElementById("token").value=saved;
+
+document.getElementById("btnLive").onclick=startLive;
+document.getElementById("btnStop").onclick=stopLive;
+document.getElementById("btnExport").onclick=exportDrive;
+document.getElementById("btnLoadProxy").onclick=()=>document.getElementById("fileIn").click();
+document.getElementById("fileIn").onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader(); r.onload=()=>loadTrace(r.result,f.name); r.readAsText(f);
+};
+document.getElementById("btnPlay").onclick=()=>{
+  if(MODE!=="REPLAY"){ alert("Load a trace first."); return; }
+  REPLAY.playing=!REPLAY.playing; syncBtns();
+  if(REPLAY.playing) replayLoop();
+};
+document.getElementById("btnStep").onclick=()=>{ if(MODE==="REPLAY"){ REPLAY.playing=false; syncBtns(); replayStep(); } };
+document.getElementById("btnRestart").onclick=()=>{
+  if(MODE!=="REPLAY") return;
+  REPLAY.i=0; REPLAY.playing=false;
+  ENGINE.prevSnap=null; ENGINE.prevFixes=[]; RS.state="UNCERTAIN"; RS.good=0; RS.bad=0;
+  syncBtns(); replayStep();
+};
+document.getElementById("btnOrient").onclick=e=>{
+  HEADING_UP=!HEADING_UP;
+  e.target.textContent=HEADING_UP?"HEADING-UP":"NORTH-UP";
+  e.target.classList.toggle("on",HEADING_UP);
+};
+document.getElementById("btnResetP").onclick=()=>{ P=Object.assign({},DEFAULTS); GRAPH_KEY=""; buildParams(); log("params reset"); };
+document.getElementById("btnRebuild").onclick=async()=>{
+  GRAPH_KEY=""; TILES.clear();
+  log("cache cleared, graph will rebuild on next fix");
+};
+function syncBtns(){
+  document.getElementById("btnLive").classList.toggle("on",MODE==="LIVE");
+  document.getElementById("btnPlay").textContent=REPLAY.playing?"PAUSE":"PLAY";
+  document.getElementById("btnPlay").classList.toggle("on",REPLAY.playing);
+}
+log("Ahead Lab 0.1 ready. Enter token, then START LIVE (or LOAD TRACE for replay).");
+</script>
+</body>
+</html>
