@@ -1,0 +1,488 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#000">
+<title>F1rstHUD Prototype 0.1E.2</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;background:#000;color:#fff;overflow:hidden;
+  font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
+#hud{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;padding:24px;transform:scaleX(-1)}
+#street{font-size:clamp(38px,10vw,82px);font-weight:850;line-height:1.02;max-width:95vw}
+#block{font-size:clamp(25px,6.5vw,50px);font-weight:760;margin-top:14px;min-height:1.15em}
+#direction{font-size:clamp(19px,4.5vw,34px);font-weight:800;margin-top:8px;letter-spacing:.06em}
+#next{font-size:clamp(20px,5vw,39px);font-weight:760;margin-top:46px;max-width:95vw}
+#status{font-size:clamp(12px,3vw,16px);font-weight:600;margin-top:22px;opacity:.55}
+#diag{font-size:11px;font-weight:500;margin-top:10px;opacity:.55;white-space:pre-line;display:none;
+  font-family:ui-monospace,Menlo,monospace;line-height:1.5}
+#setup{position:fixed;left:10px;right:10px;bottom:max(12px,env(safe-area-inset-bottom));
+  display:flex;gap:7px;justify-content:center;z-index:4}
+input,button{background:#111;color:#ddd;border:1px solid #666;border-radius:11px;padding:10px;font-size:14px}
+input{width:205px;min-width:0}
+#gear{position:fixed;right:8px;top:max(8px,env(safe-area-inset-top));background:transparent;border:0;
+  color:#444;font-size:22px;z-index:5}
+@media(orientation:landscape){
+  #street{font-size:13vh}#block{font-size:8vh;margin-top:7px}#direction{font-size:5.5vh;margin-top:4px}
+  #next{font-size:5.8vh;margin-top:24px}#status{margin-top:12px}}
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div id="street">READY</div>
+  <div id="block">LIVE LOCATION</div>
+  <div id="direction">—</div>
+  <div id="next">NEXT: —</div>
+  <div id="status">0.1E.2 • SPECIALIST ENGINES</div>
+  <div id="diag"></div>
+</div>
+
+<div id="setup">
+  <input id="token" placeholder="pk. Mapbox public token" autocapitalize="off" autocomplete="off">
+  <button id="start">ENABLE LOCATION</button>
+  <button id="mirror">MIRROR</button>
+</div>
+<button id="gear">⚙︎</button>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id), hud = $("hud"), setup = $("setup");
+
+let watchId = null, mirrored = true, wakeLock = null;
+let trace = [], course = null, lastFix = null;
+let busy = false, lastQuery = 0;
+let lastRoad = "", roadCandidate = "", roadHits = 0;
+let lastDir = "", dirCandidate = "", dirHits = 0;
+let lastBlock = "", blockAnchor = null;
+let lockedAhead = null;          // {name, lat, lon, road, minD}
+let hwyMode = false, onKeys = new Set();
+let debug = false;
+let stats = { calls: 0, cycle: 0, issue: "", src: "", conf: null, mode: "", stop: "" };
+
+const saved = localStorage.getItem("mapbox_public_token");
+if (saved) $("token").value = saved;
+
+/* ---------------- geometry ---------------- */
+function meters(a, b, c, d) {
+  const R = 6371000, p = Math.PI / 180;
+  const x = (d - b) * p * Math.cos((a + c) / 2 * p), y = (c - a) * p;
+  return Math.hypot(x, y) * R;
+}
+function bearing(a, b, c, d) {
+  const p = Math.PI / 180;
+  const y = Math.sin((d - b) * p) * Math.cos(c * p);
+  const x = Math.cos(a * p) * Math.sin(c * p) - Math.sin(a * p) * Math.cos(c * p) * Math.cos((d - b) * p);
+  return (Math.atan2(y, x) / p + 360) % 360;
+}
+function dest(lat, lon, deg, m) {
+  const R = 6371000, d = m / R, q = deg * Math.PI / 180;
+  const p1 = lat * Math.PI / 180, l1 = lon * Math.PI / 180;
+  const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(q));
+  const l2 = l1 + Math.atan2(Math.sin(q) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+  return [l2 * 180 / Math.PI, p2 * 180 / Math.PI];
+}
+
+/* ---------------- names ---------------- */
+function norm(s) {
+  return String(s || "").toUpperCase().trim().replace(/\s+/g, " ")
+    .replace(/\b(WEST|EAST|NORTH|SOUTH)\s+FARM[- ]TO[- ]MARKET(?: ROAD)?\s*(\d+)\b/g, "FM $2")
+    .replace(/\bFARM[- ]TO[- ]MARKET(?: ROAD)?\s*(\d+)\b/g, "FM $1")
+    .replace(/\bFARM ROAD\s*(\d+)\b/g, "FM $1")
+    .replace(/\bCOUNTY ROAD\s*(\d+)\b/g, "CR $1");
+}
+// FIX: 0.1E.1 stripped the word WEST but not the letter W, and stripped no
+// suffix beyond ROAD/STREET/HWY. So "W 18TH ST" and "West 18th Street" did not
+// match, and neither did "White Oak Dr" and "White Oak Drive". That is why the
+// block engine started rejecting good addresses after same() went exact-only.
+const DIRW = /\b(NORTHEAST|NORTHWEST|SOUTHEAST|SOUTHWEST|NORTH|SOUTH|EAST|WEST|NB|SB|EB|WB|NE|NW|SE|SW|N|S|E|W)\b/g;
+const SUFW = /\b(ROAD|RD|STREET|STR|ST|DRIVE|DRV|DR|AVENUE|AVE|AV|BOULEVARD|BLVD|LANE|LN|COURT|CT|PARKWAY|PKWY|PKY|TRAIL|TRL|CIRCLE|CIR|PLACE|PL|TERRACE|TER|WAY|LOOP|CROSSING|XING|HIGHWAY|HWY|EXPRESSWAY|EXPY|FREEWAY|FWY|FRONTAGE|SERVICE|BYPASS|EXTENSION|EXT|CONNECTOR)\b/g;
+function key(s) {
+  const base = norm(s);
+  const t = base.replace(DIRW, " ").replace(SUFW, " ").replace(/[^A-Z0-9]/g, "");
+  return t || base.replace(/[^A-Z0-9]/g, "");   // never collapse to nothing
+}
+// FIX: 0.1E used bare .includes() (FM 19 matched FM 1960). 0.1E.1 swung to
+// exact-only, which was too brittle. This is a guarded prefix match.
+function same(a, b) {
+  const x = key(a), y = key(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const s = x.length < y.length ? x : y, l = x.length < y.length ? y : x;
+  if (s.length < 5 || !l.startsWith(s)) return false;
+  if (/\d$/.test(s) && /\d/.test(l[s.length])) return false;   // don't split a number
+  return true;
+}
+function inSet(set, name) {
+  const k = key(name);
+  if (!k) return false;
+  if (set.has(k)) return true;
+  for (const q of set) if (same(q, k)) return true;
+  return false;
+}
+
+/* ---------------- display helpers ---------------- */
+function cardinal(h) {
+  if (h == null) return "";
+  h = (h + 360) % 360;
+  return h >= 315 || h < 45 ? "NORTH" : h < 135 ? "EAST" : h < 225 ? "SOUTH" : "WEST";
+}
+function stableDir(h) {
+  const d = cardinal(h);
+  if (!d) return lastDir;
+  if (!lastDir) return (lastDir = d);
+  if (d === lastDir) { dirCandidate = ""; dirHits = 0; return d; }
+  if (d === dirCandidate) dirHits++; else { dirCandidate = d; dirHits = 1; }
+  if (dirHits >= 2) { lastDir = d; dirCandidate = ""; dirHits = 0; }
+  return lastDir;
+}
+function distText(m) {
+  const ft = m * 3.28084;
+  return ft >= 2640 ? (ft / 5280).toFixed(1) + " MI" : Math.max(50, Math.round(ft / 50) * 50) + " FT";
+}
+function setRoad(c, conf) {
+  c = norm(c);
+  if (!c) return lastRoad;
+  if (!lastRoad) return (lastRoad = c);
+  if (c === lastRoad) { roadCandidate = ""; roadHits = 0; return c; }
+  if (conf >= .8) { roadCandidate = ""; roadHits = 0; return (lastRoad = c); }
+  if (c === roadCandidate) roadHits++; else { roadCandidate = c; roadHits = 1; }
+  if (roadHits >= 2) { lastRoad = c; roadCandidate = ""; roadHits = 0; }
+  return lastRoad;
+}
+
+/* ---------------- network ---------------- */
+const cache = new Map();
+async function api(url, label, ttl) {
+  if (ttl) { const h = cache.get(url); if (h && Date.now() - h.t < ttl) return h.v; }
+  stats.calls++;
+  let r;
+  try { r = await fetch(url); }
+  catch (e) { stats.issue = label + " NET"; return null; }
+  if (!r.ok) {
+    stats.issue = label + " " + r.status +
+      (r.status === 401 ? " TOKEN" : r.status === 429 ? " LIMIT" : "");
+    return null;
+  }
+  let j; try { j = await r.json(); } catch (e) { stats.issue = label + " JSON"; return null; }
+  if (ttl) { if (cache.size > 600) cache.clear(); cache.set(url, { v: j, t: Date.now() }); }
+  return j;
+}
+const T = () => encodeURIComponent($("token").value.trim());
+
+async function match() {
+  if (trace.length < 2) return null;
+  const raw = trace.slice(-7), p = [];
+  let lastSec = -1;
+  for (const q of raw) { const s = Math.floor(q.time / 1000); if (s > lastSec) { p.push({ ...q, s }); lastSec = s; } }
+  if (p.length < 2) return null;
+  const coords = p.map(x => `${x.lon},${x.lat}`).join(";");
+  const ts = p.map(x => x.s).join(";");
+  const rad = p.map(x => Math.min(50, Math.max(8, Math.round(x.acc || 15)))).join(";");
+  const j = await api(`https://api.mapbox.com/matching/v5/mapbox/driving/${coords}.json` +
+    `?tidy=true&timestamps=${ts}&radiuses=${rad}&overview=false&access_token=${T()}`, "MATCH");
+  if (!j) return null;
+  const tp = [...(j.tracepoints || [])].reverse().find(Boolean);
+  if (!tp) return null;
+  return { road: norm(tp.name), confidence: j.matchings?.[tp.matchings_index ?? 0]?.confidence ?? 0 };
+}
+
+async function tilequery(lon, lat, layers, radius, limit, ttl = 40000) {
+  const j = await api(`https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/` +
+    `${lon.toFixed(6)},${lat.toFixed(6)}.json?radius=${radius}&limit=${limit}` +
+    `&layers=${layers}&access_token=${T()}`, "TILE", ttl);
+  return j?.features || [];
+}
+
+// Returns every named road line near a point, nearest first, with class and distance.
+async function roadsNear(lat, lon, radius = 25, limit = 25) {
+  const f = await tilequery(lon, lat, "road", radius, limit);
+  return f
+    .filter(x => String(x.properties?.tilequery?.geometry || "").toLowerCase() === "linestring" && x.properties?.name)
+    .map(x => ({
+      name: norm(x.properties.name),
+      cls: String(x.properties.class || "").toLowerCase(),
+      type: String(x.properties.type || "").toLowerCase(),
+      d: x.properties.tilequery.distance ?? 999
+    }))
+    .sort((a, b) => a.d - b.d);
+}
+
+async function reverseOne(lat, lon) {
+  const j = await api(`https://api.mapbox.com/search/geocode/v6/reverse?longitude=${lon.toFixed(6)}` +
+    `&latitude=${lat.toFixed(6)}&country=us&types=address&limit=1&access_token=${T()}`, "GEOCODE", 40000);
+  const f = j?.features?.[0]; if (!f) return null;
+  const p = f.properties || {}, c = p.context || {};
+  return { road: norm(c.street?.name || p.name || ""), number: String(c.address?.address_number || p.address_number || "") };
+}
+
+/* ---------------- surface classification ---------------- */
+// FIX: frontageMode() used to look for the words FRONTAGE or SERVICE in the
+// name, but Mapbox labels most feeders with the highway's own name — which is
+// why the HUD kept showing EXIT while you were on the feeder. This decides
+// geometrically instead: if a named non-motorway line is closer than the
+// motorway centerline, you are on the feeder, whatever it is called.
+function classify(near, road) {
+  const mw = near.find(x => x.cls === "motorway" || x.type === "motorway");
+  const surf = near.find(x => x.cls !== "motorway" && x.type !== "motorway" &&
+    !["service", "path", "track", "pedestrian"].includes(x.cls));
+  if (mw && surf) {
+    if (surf.d + 8 < mw.d) return "FRONTAGE";
+    if (mw.d + 8 < surf.d) return "HWY";
+  }
+  if (mw && !surf) return mw.d <= 22 ? "HWY" : "ROAD";
+  if (!mw && surf) return "ROAD";
+  return /\b(INTERSTATE|TOLLWAY|TURNPIKE)\b/.test(norm(road)) ? "HWY" : "ROAD";
+}
+
+/* ---------------- block engine ---------------- */
+async function blockEngine(lat, lon, heading, road, isHwy) {
+  if (isHwy) { lastBlock = ""; blockAnchor = null; return ""; }
+  const pts = [[lon, lat]];
+  if (heading != null) {
+    for (const off of [25, 45]) pts.push(dest(lat, lon, heading + 90, off), dest(lat, lon, heading - 90, off));
+  }
+  const gs = await Promise.all(pts.map(p => reverseOne(p[1], p[0])));
+  const vals = [];
+  for (const g of gs) {
+    if (!g || !same(g.road, road)) continue;
+    const m = g.number.match(/\d+/), n = m ? +m[0] : NaN;
+    if (Number.isFinite(n) && n >= 100) vals.push(Math.floor(n / 100) * 100);
+  }
+  if (vals.length) {
+    vals.sort((a, b) => a - b);
+    lastBlock = vals[Math.floor(vals.length / 2)] + " BLOCK";
+    blockAnchor = { lat, lon, road };
+    return lastBlock;
+  }
+  // FIX: the old hold was a count of misses, so a stale block could survive an
+  // arbitrary distance. Hold it only while we are plausibly still on it.
+  if (lastBlock && blockAnchor && same(blockAnchor.road, road) &&
+      meters(blockAnchor.lat, blockAnchor.lon, lat, lon) < 180) return lastBlock;
+  lastBlock = ""; blockAnchor = null;
+  return "";
+}
+
+/* ---------------- ahead engine ---------------- */
+async function routeLine(lat, lon, heading) {
+  if (heading == null) return [];
+  const e = dest(lat, lon, heading, 2200);
+  const j = await api(`https://api.mapbox.com/directions/v5/mapbox/driving/${lon},${lat};${e[0]},${e[1]}` +
+    `?overview=full&geometries=geojson&steps=false&bearings=${Math.round(heading)},80;&access_token=${T()}`, "ROUTE");
+  return j?.routes?.[0]?.geometry?.coordinates || [];
+}
+function sampleLine(coords, maxM, stepM, startM) {
+  if (coords.length < 2) return [];
+  const out = [];
+  let walk = 0, next = startM;
+  for (let i = 1; i < coords.length; i++) {
+    const a = coords[i - 1], b = coords[i], seg = meters(a[1], a[0], b[1], b[0]);
+    if (seg <= 0) continue;
+    while (walk + seg >= next && next <= maxM) {
+      const t = (next - walk) / seg;
+      out.push({ lon: a[0] + (b[0] - a[0]) * t, lat: a[1] + (b[1] - a[1]) * t, d: next });
+      next += stepM;
+    }
+    walk += seg;
+    if (walk > maxM) break;
+  }
+  return out;
+}
+const SKIP = ["service", "path", "track", "pedestrian", "construction", "ferry", "golf", "aerialway"];
+
+async function aheadEngine(lat, lon, heading, isHwy) {
+  const line = await routeLine(lat, lon, heading);
+  if (!line.length) { stats.stop = "no route"; return null; }
+
+  if (isHwy) {
+    // FIX: junctions are point features. Sampling every 150 m with a 28 m radius
+    // stepped straight over most of them, which is why exits appeared less than
+    // half the time. Wider radius, and every sample fires at once.
+    const samples = sampleLine(line, 3200, 130, 200);
+    if (!samples.length) { stats.stop = "no samples"; return null; }
+    const res = await Promise.all(samples.map(s =>
+      tilequery(s.lon, s.lat, "motorway_junction", 90, 10).then(f => ({ s, f }))));
+    for (const { s, f } of res) {
+      const j = f.filter(x => x.properties?.ref || x.properties?.name)
+        .sort((a, b) => (a.properties.tilequery.distance ?? 999) - (b.properties.tilequery.distance ?? 999))[0];
+      if (!j) continue;
+      const ref = String(j.properties.ref || "").trim(), nm = norm(j.properties.name || "");
+      const g = j.geometry?.coordinates;   // point geometry — exact junction location
+      stats.stop = "exit @" + Math.round(s.d) + "m";
+      return {
+        name: ref ? `EXIT ${ref}${nm ? " • " + nm : ""}` : (nm ? "EXIT • " + nm : "EXIT"),
+        lat: Array.isArray(g) ? g[1] : s.lat,
+        lon: Array.isArray(g) ? g[0] : s.lon
+      };
+    }
+    stats.stop = "no junction";
+    return null;
+  }
+
+  const samples = sampleLine(line, 1300, 95, 55);
+  if (!samples.length) { stats.stop = "no samples"; return null; }
+  // FIX: these were awaited one at a time — 16 round trips per cycle.
+  const res = await Promise.all(samples.map(s => roadsNear(s.lat, s.lon, 16, 20).then(list => ({ s, list }))));
+
+  for (const { s, list } of res) {
+    // FIX: exclusion is now by the geometry actually under the vehicle, not by
+    // the display label. When the street engine had not resolved a name, road
+    // was "" and nothing got excluded — so the HUD announced the road you were
+    // already driving on as the next street.
+    const cross = list.filter(x => !inSet(onKeys, x.name) && !SKIP.includes(x.cls) && x.d <= 10)[0];
+    if (cross) { stats.stop = "cross @" + Math.round(s.d) + "m"; return { name: cross.name, lat: s.lat, lon: s.lon }; }
+
+    // FIX: routeLine casts a point 2200 m out and lets the router reach it any
+    // way it likes. Once it turns off your street every later sample is on a
+    // different road — that is the "showed a road 2 miles away" result. Stop
+    // the search the moment our own road is no longer under the route.
+    const stillOnRoad = list.some(x => inSet(onKeys, x.name) && x.d <= 14);
+    if (!stillOnRoad) { stats.stop = "route left road @" + Math.round(s.d) + "m"; return null; }
+  }
+  stats.stop = "no cross found";
+  return null;
+}
+
+/* ---------------- render ---------------- */
+function paintNext() {
+  if (course == null) { $("next").textContent = "NEXT: START MOVING"; return; }
+  if (lockedAhead && lastFix && Number.isFinite(lockedAhead.lat)) {
+    const d = meters(lastFix.lat, lastFix.lon, lockedAhead.lat, lockedAhead.lon);
+    if (lockedAhead.minD == null || d < lockedAhead.minD) lockedAhead.minD = d;
+    // FIX: nothing used to clear a locked target once you drove through it.
+    if (d < 18 || d > lockedAhead.minD + 60) { lockedAhead = null; }
+    else { $("next").textContent = `NEXT: ${lockedAhead.name} • ${distText(d)}`; return; }
+  }
+  $("next").textContent = hwyMode ? "NEXT EXIT: —" : "NEXT: —";
+}
+function paintDiag() {
+  if (!debug) return;
+  $("diag").textContent =
+    `calls ${stats.calls} • cycle ${stats.cycle}ms • cache ${cache.size}\n` +
+    `street from ${stats.src || "—"} • match ${stats.conf == null ? "—" : Math.round(stats.conf * 100) + "%"}\n` +
+    `surface ${stats.mode || "—"} • on: ${[...onKeys].slice(0, 3).join(",") || "—"}\n` +
+    `ahead: ${stats.stop || "—"}\n` +
+    `course ${course == null ? "—" : Math.round(course) + "°"} • trace ${trace.length}\n` +
+    `issue: ${stats.issue || "none"}`;
+}
+
+/* ---------------- cycle ---------------- */
+async function refresh(lat, lon, acc) {
+  const token = $("token").value.trim();
+  if (!token.startsWith("pk.")) { $("status").textContent = "PUBLIC TOKEN NEEDED"; return; }
+  const t0 = Date.now();
+  stats.issue = "";
+
+  // FIX: match and the local road lookup were sequential; they are independent.
+  const [mm, near] = await Promise.all([match(), roadsNear(lat, lon, 25, 25)]);
+  const rg = (!mm?.road && !near.length) ? await reverseOne(lat, lon) : null;
+
+  const road = setRoad(mm?.road || near[0]?.name || rg?.road || lastRoad, mm?.confidence ?? 0);
+  stats.src = mm?.road ? "match" : near[0]?.name ? "tile" : rg?.road ? "geocode" : "held";
+  stats.conf = mm?.confidence ?? null;
+
+  // Names of every line physically under or beside us. This is what the ahead
+  // engine excludes, so it works even when the display name is still blank.
+  onKeys = new Set(near.filter(x => x.d <= 18).map(x => key(x.name)));
+  if (road) onKeys.add(key(road));
+
+  const surface = classify(near, road);
+  hwyMode = surface === "HWY";
+  stats.mode = surface;
+
+  $("street").textContent = road || "STREET UNKNOWN";
+  $("direction").textContent = stableDir(course) || "—";
+
+  const nearAnchor = blockAnchor && same(blockAnchor.road, road) &&
+    meters(blockAnchor.lat, blockAnchor.lon, lat, lon) < 25;
+  if (!nearAnchor) await blockEngine(lat, lon, course, road, hwyMode);
+  $("block").textContent = hwyMode ? "" : (lastBlock || "BLOCK —");
+
+  // Don't re-sweep while the locked target is still well out in front; the
+  // distance is being recomputed locally on every fix anyway.
+  let needAhead = true;
+  if (lockedAhead && same(lockedAhead.road, road) && Number.isFinite(lockedAhead.lat)) {
+    if (meters(lat, lon, lockedAhead.lat, lockedAhead.lon) > 150) needAhead = false;
+  }
+  if (course != null && needAhead) {
+    const fresh = await aheadEngine(lat, lon, course, hwyMode);
+    if (fresh) lockedAhead = { ...fresh, road, minD: null };
+    else if (lockedAhead && !same(lockedAhead.road, road)) lockedAhead = null;
+  }
+  paintNext();
+
+  stats.cycle = Date.now() - t0;
+  const mt = mm ? ` • MATCH ${Math.round(mm.confidence * 100)}%` : "";
+  $("status").textContent = `LIVE • GPS ±${Math.round(acc * 3.28084)} FT${mt} • ${surface}` +
+    `${stats.issue ? " • " + stats.issue : ""} • 0.1E.2`;
+  setup.style.display = "none";
+  paintDiag();
+}
+
+/* ---------------- GPS ---------------- */
+function onFix(c) {
+  const pt = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, time: Date.now() };
+  lastFix = pt;
+
+  const prev = trace[trace.length - 1];
+  if (!prev || meters(prev.lat, prev.lon, pt.lat, pt.lon) > 5) {
+    trace.push(pt);
+    if (trace.length > 8) trace.shift();
+  }
+
+  // FIX: 0.1E.1 put the trace-derived bearing in an else branch, so it only ran
+  // when the vehicle had moved LESS than 5 m — i.e. only while stopped. Driving,
+  // it never fired, and course stayed frozen at whatever GPS last reported.
+  if (c.heading != null && !Number.isNaN(c.heading) && (c.speed == null || c.speed > .8)) {
+    course = c.heading;
+  } else if (trace.length >= 2) {
+    const a = trace[0], z = trace[trace.length - 1];
+    if (meters(a.lat, a.lon, z.lat, z.lon) > 12) course = bearing(a.lat, a.lon, z.lat, z.lon);
+  }
+
+  $("direction").textContent = stableDir(course) || "—";
+  paintNext();
+  paintDiag();
+
+  const now = Date.now();
+  if (now - lastQuery >= 5000 && !busy) {
+    lastQuery = now;
+    busy = true;
+    refresh(pt.lat, pt.lon, c.accuracy)
+      .catch(e => { console.error(e); stats.issue = "EXCEPTION"; $("status").textContent = "LOOKUP ISSUE • 0.1E.2"; })
+      .finally(() => { busy = false; });
+  }
+}
+
+async function requestWakeLock() {
+  try { if ("wakeLock" in navigator && (!wakeLock || wakeLock.released)) wakeLock = await navigator.wakeLock.request("screen"); }
+  catch (e) { console.warn("WAKE LOCK", e); }
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && watchId !== null) requestWakeLock();
+});
+
+/* ---------------- controls ---------------- */
+$("start").onclick = async () => {
+  if (!navigator.geolocation) { $("status").textContent = "GPS NOT AVAILABLE"; return; }
+  const token = $("token").value.trim();
+  if (!token.startsWith("pk.")) { $("status").textContent = "PUBLIC TOKEN NEEDED"; return; }
+  if (!window.isSecureContext) { $("status").textContent = "SERVE OVER HTTPS FOR GPS"; return; }
+  localStorage.setItem("mapbox_public_token", token);
+  await requestWakeLock();
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  $("status").textContent = "REQUESTING LOCATION…";
+  watchId = navigator.geolocation.watchPosition(
+    pos => onFix(pos.coords),
+    err => { $("status").textContent = err.code === 1 ? "LOCATION DENIED" : "GPS ERROR"; stats.issue = "GPS " + err.code; },
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
+  );
+};
+$("mirror").onclick = () => { mirrored = !mirrored; hud.style.transform = mirrored ? "scaleX(-1)" : "none"; };
+$("gear").onclick = () => setup.style.display = "flex";
+$("status").onclick = () => { debug = !debug; $("diag").style.display = debug ? "block" : "none"; paintDiag(); };
+</script>
+</body>
+</html>
