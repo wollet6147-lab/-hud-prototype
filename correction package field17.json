@@ -1,0 +1,691 @@
+{
+ "kind": "f1rsthud-correction",
+ "version": "field17-2026-09-18-v1",
+ "supersedes": "lab-2026-09-18-v5",
+ "semanticSignature": "sha256:0bc241a7f89d6366844ff0a2cd6a37c15606eea2734d715d7cc38d7cc9993de6",
+ "createdAt": "2026-09-18T05:13:35.065Z",
+ "producer": "F1rstHUD self-correction LAB (offline) — validator 0.1 (2026-09-17 lab)",
+ "signature": "sha256:0bc241a7f89d6366844ff0a2cd6a37c15606eea2734d715d7cc38d7cc9993de6",
+ "signatureNote": "lab signature = sha256 of entries; a real backend signs with a key",
+ "policy": "overlay only: consulted where the engine chain is blank; never modifies source datasets; disable by not loading; reversible by version",
+ "entries": [
+  {
+   "key": "block|ohio drive|66648,-193573",
+   "field": "block",
+   "value": "100 BLOCK",
+   "scope": {
+    "road": "S Ohio Dr",
+    "canon": "ohio drive",
+    "cell": "66648,-193573",
+    "lat": 33.323878,
+    "lon": -96.786407,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "tiger-range: 101–199 span 98 (vehicle side)",
+    "address-points: bracket 110…102 over 30 m",
+    "geocode-saved: 8/8 samples within 60 m agree"
+   ],
+   "evidenceCount": 3,
+   "correctionId": "corr-0296",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 7,
+     "days": [
+      "2026-09-13"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:19.736Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: address-points + geocode-saved; replay: recovered 22, wrong 0, other fields unchanged, suite green; independently graded correct on 14 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|walnut street|66647,-193567",
+   "field": "block",
+   "value": "200 BLOCK",
+   "scope": {
+    "road": "E Walnut St",
+    "canon": "walnut street",
+    "cell": "66647,-193567",
+    "lat": 33.323411,
+    "lon": -96.783451,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "ng911-range: 201–299 span 98 (vehicle side)",
+    "tiger-range: 299–101 span 198 (vehicle side)",
+    "address-points: bracket 208…212 over 23 m",
+    "geocode-saved: 16/16 samples within 60 m agree"
+   ],
+   "evidenceCount": 4,
+   "correctionId": "corr-0299",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 6,
+     "days": [
+      "2026-09-13"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:19.738Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: ng911-range-strong + address-points + geocode-saved; replay: recovered 6, wrong 0, other fields unchanged, suite green; independently graded correct on 5 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|farm to market 455|66691,-193392",
+   "field": "block",
+   "value": "7600 BLOCK",
+   "scope": {
+    "road": "FM 455",
+    "canon": "farm to market 455",
+    "cell": "66691,-193392",
+    "lat": 33.345728,
+    "lon": -96.69613,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "ng911-range: 7601–7649 span 48 (vehicle side)",
+    "tiger-range: 7699–7487 span 212 (vehicle side)",
+    "address-points: bracket 7656…7629 over 139 m",
+    "geocode-saved: 33/42 samples within 60 m agree"
+   ],
+   "evidenceCount": 4,
+   "correctionId": "corr-0735",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 2,
+     "days": [
+      "2026-09-13",
+      "2026-09-15"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:19.926Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: ng911-range-strong + address-points + geocode-saved; replay: recovered 2, wrong 0, other fields unchanged, suite green; 3 strong families, blank on 2 days, offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|farm to market 455|66698,-193344",
+   "field": "block",
+   "value": "6200 BLOCK",
+   "scope": {
+    "road": "FM 455",
+    "canon": "farm to market 455",
+    "cell": "66698,-193344",
+    "lat": 33.349081,
+    "lon": -96.671904,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "ng911-range: 6201–6299 span 98 (vehicle side)",
+    "tiger-range: 6299–6201 span 98 (vehicle side)",
+    "address-points: bracket 6274…6270 over 24 m",
+    "geocode-saved: 31/34 samples within 60 m agree"
+   ],
+   "evidenceCount": 4,
+   "correctionId": "corr-0787",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 4,
+     "days": [
+      "2026-09-13",
+      "2026-09-15"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:19.984Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: ng911-range-strong + address-points + geocode-saved; replay: recovered 4, wrong 0, other fields unchanged, suite green; independently graded correct on 4 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|farm to market 455|66698,-193343",
+   "field": "block",
+   "value": "6200 BLOCK",
+   "scope": {
+    "road": "FM 455",
+    "canon": "farm to market 455",
+    "cell": "66698,-193343",
+    "lat": 33.349083,
+    "lon": -96.671441,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "ng911-range: 6201–6299 span 98 (vehicle side)",
+    "tiger-range: 6299–6201 span 98 (vehicle side)",
+    "address-points: bracket 6270…6214 over 78 m",
+    "geocode-saved: 40/40 samples within 60 m agree"
+   ],
+   "evidenceCount": 4,
+   "correctionId": "corr-0788",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 4,
+     "days": [
+      "2026-09-13",
+      "2026-09-15"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:19.985Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: ng911-range-strong + address-points + geocode-saved; replay: recovered 4, wrong 0, other fields unchanged, suite green; independently graded correct on 4 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|farm to market 455|66710,-193326",
+   "field": "block",
+   "value": "5400 BLOCK",
+   "scope": {
+    "road": "FM 455",
+    "canon": "farm to market 455",
+    "cell": "66710,-193326",
+    "lat": 33.355116,
+    "lon": -96.662925,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "ng911-range: 5419–5429 span 10 (vehicle side)",
+    "tiger-range: 5555–5381 span 174 (vehicle side)",
+    "address-points: bracket 5431…5413 over 100 m",
+    "geocode-saved: 39/39 samples within 60 m agree"
+   ],
+   "evidenceCount": 4,
+   "correctionId": "corr-0814",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 4,
+     "days": [
+      "2026-09-13",
+      "2026-09-15"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.011Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: ng911-range-strong + address-points + geocode-saved; replay: recovered 4, wrong 0, other fields unchanged, suite green; 3 strong families, blank on 2 days, offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|farm to market 455|66719,-193321",
+   "field": "block",
+   "value": "5100 BLOCK",
+   "scope": {
+    "road": "FM 455",
+    "canon": "farm to market 455",
+    "cell": "66719,-193321",
+    "lat": 33.359452,
+    "lon": -96.660483,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "ng911-range: 5121–5199 span 78 (vehicle side)",
+    "tiger-range: 5379–5083 span 296 (vehicle side)",
+    "address-points: bracket 5110…5175 over 143 m",
+    "geocode-saved: 41/41 samples within 60 m agree"
+   ],
+   "evidenceCount": 4,
+   "correctionId": "corr-0825",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 8,
+     "days": [
+      "2026-09-13",
+      "2026-09-15"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.022Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: ng911-range-strong + address-points + geocode-saved; replay: recovered 8, wrong 0, other fields unchanged, suite green; 3 strong families, blank on 2 days, offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|farm to market 3356|66769,-193276",
+   "field": "block",
+   "value": "11500 BLOCK",
+   "scope": {
+    "road": "FM 3356",
+    "canon": "farm to market 3356",
+    "cell": "66769,-193276",
+    "lat": 33.384459,
+    "lon": -96.637815,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "ng911-range: 11500–11578 span 78 (vehicle side)",
+    "tiger-range: 11201–11577 span 376 (vehicle side)",
+    "address-points: bracket 11514…11578 over 86 m",
+    "geocode-saved: 26/26 samples within 60 m agree"
+   ],
+   "evidenceCount": 4,
+   "correctionId": "corr-0925",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 3,
+     "days": [
+      "2026-09-13",
+      "2026-09-15"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.080Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: ng911-range-strong + address-points + geocode-saved; replay: recovered 3, wrong 0, other fields unchanged, suite green; 3 strong families, blank on 2 days, offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|farm to market 3356|66821,-193277",
+   "field": "block",
+   "value": "800 BLOCK",
+   "scope": {
+    "road": "FM 3356",
+    "canon": "farm to market 3356",
+    "cell": "66821,-193277",
+    "lat": 33.410521,
+    "lon": -96.638676,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "tiger-range: 999–851 span 148 (vehicle side)",
+    "address-points: bracket 851…881 over 39 m",
+    "geocode-saved: 40/43 samples within 60 m agree"
+   ],
+   "evidenceCount": 3,
+   "correctionId": "corr-0970",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 6,
+     "days": [
+      "2026-09-13",
+      "2026-09-15"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.094Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: address-points + geocode-saved; replay: recovered 6, wrong 0, other fields unchanged, suite green; independently graded correct on 5 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|farm to market 121|66846,-193271",
+   "field": "block",
+   "value": "14100 BLOCK",
+   "scope": {
+    "road": "FM 121",
+    "canon": "farm to market 121",
+    "cell": "66846,-193271",
+    "lat": 33.423025,
+    "lon": -96.635511,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "tiger-range: 14000–14198 span 198 (vehicle side)",
+    "address-points: bracket 14163…14124 over 48 m",
+    "geocode-saved: 64/66 samples within 60 m agree"
+   ],
+   "evidenceCount": 3,
+   "correctionId": "corr-1001",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 10,
+     "days": [
+      "2026-09-13",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-17"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.103Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: address-points + geocode-saved; replay: recovered 10, wrong 0, other fields unchanged, suite green; independently graded correct on 9 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|horseshoe lane|66845,-193214",
+   "field": "block",
+   "value": "1700 BLOCK",
+   "scope": {
+    "road": "Horseshoe Ln",
+    "canon": "horseshoe lane",
+    "cell": "66845,-193214",
+    "lat": 33.422471,
+    "lon": -96.607008,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "tiger-range: 1700–1800 span 100 (vehicle side)",
+    "address-points: bracket 1746…1745 over 9 m",
+    "geocode-saved: 126/130 samples within 60 m agree"
+   ],
+   "evidenceCount": 3,
+   "correctionId": "corr-1063",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 35,
+     "days": [
+      "2026-09-13",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.137Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: address-points + geocode-saved; replay: recovered 35, wrong 0, other fields unchanged, suite green; independently graded correct on 34 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|horseshoe lane|66845,-193213",
+   "field": "block",
+   "value": "1700 BLOCK",
+   "scope": {
+    "road": "Horseshoe Ln",
+    "canon": "horseshoe lane",
+    "cell": "66845,-193213",
+    "lat": 33.422479,
+    "lon": -96.60652,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "tiger-range: 1700–1800 span 100 (vehicle side)",
+    "address-points: bracket 1733…1726 over 11 m",
+    "geocode-saved: 108/108 samples within 60 m agree"
+   ],
+   "evidenceCount": 3,
+   "correctionId": "corr-1064",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 38,
+     "days": [
+      "2026-09-13",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.138Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: address-points + geocode-saved; replay: recovered 38, wrong 0, other fields unchanged, suite green; independently graded correct on 38 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|main street|66893,-193481",
+   "field": "block",
+   "value": "100 BLOCK",
+   "scope": {
+    "road": "E Main St",
+    "canon": "main street",
+    "cell": "66893,-193481",
+    "lat": 33.446354,
+    "lon": -96.740544,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "tiger-range: 198–100 span 98 (vehicle side)",
+    "address-points: bracket 112…115 over 26 m",
+    "geocode-saved: 12/12 samples within 60 m agree"
+   ],
+   "evidenceCount": 3,
+   "correctionId": "corr-1331",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 4,
+     "days": [
+      "2026-09-14",
+      "2026-09-17"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.244Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: address-points + geocode-saved; replay: recovered 4, wrong 0, other fields unchanged, suite green; independently graded correct on 2 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|main street|66893,-193482",
+   "field": "block",
+   "value": "100 BLOCK",
+   "scope": {
+    "road": "E Main St",
+    "canon": "main street",
+    "cell": "66893,-193482",
+    "lat": 33.44645,
+    "lon": -96.741014,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "tiger-range: 198–100 span 98 (vehicle side)",
+    "address-points: bracket 111…110 over 17 m",
+    "geocode-saved: 12/12 samples within 60 m agree"
+   ],
+   "evidenceCount": 3,
+   "correctionId": "corr-1332",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 5,
+     "days": [
+      "2026-09-14",
+      "2026-09-17"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.245Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: address-points + geocode-saved; replay: recovered 5, wrong 0, other fields unchanged, suite green; independently graded correct on 5 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|main street|66893,-193483",
+   "field": "block",
+   "value": "100 BLOCK",
+   "scope": {
+    "road": "E Main St",
+    "canon": "main street",
+    "cell": "66893,-193483",
+    "lat": 33.446551,
+    "lon": -96.741502,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "tiger-range: 198–100 span 98 (vehicle side)",
+    "address-points: bracket 108…109 over 4 m",
+    "geocode-saved: 15/15 samples within 60 m agree"
+   ],
+   "evidenceCount": 3,
+   "correctionId": "corr-1333",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 7,
+     "days": [
+      "2026-09-14",
+      "2026-09-17"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.246Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: address-points + geocode-saved; replay: recovered 7, wrong 0, other fields unchanged, suite green; independently graded correct on 7 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|main street|66893,-193484",
+   "field": "block",
+   "value": "100 BLOCK",
+   "scope": {
+    "road": "E Main St",
+    "canon": "main street",
+    "cell": "66893,-193484",
+    "lat": 33.446655,
+    "lon": -96.742015,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "tiger-range: 198–100 span 98 (vehicle side)",
+    "address-points: bracket 105…104 over 9 m",
+    "geocode-saved: 18/18 samples within 60 m agree"
+   ],
+   "evidenceCount": 3,
+   "correctionId": "corr-1334",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 10,
+     "days": [
+      "2026-09-14",
+      "2026-09-17"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.246Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: address-points + geocode-saved; replay: recovered 10, wrong 0, other fields unchanged, suite green; independently graded correct on 10 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  },
+  {
+   "key": "block|main street|66893,-193485",
+   "field": "block",
+   "value": "100 BLOCK",
+   "scope": {
+    "road": "E Main St",
+    "canon": "main street",
+    "cell": "66893,-193485",
+    "lat": 33.446724,
+    "lon": -96.742396,
+    "radiusM": 35
+   },
+   "confidence": 0.95,
+   "evidence": [
+    "tiger-range: 198–100 span 98 (vehicle side)",
+    "address-points: bracket 100…103 over 20 m",
+    "geocode-saved: 16/16 samples within 60 m agree"
+   ],
+   "evidenceCount": 3,
+   "correctionId": "corr-1335",
+   "validator": "validator 0.1 (2026-09-17 lab)",
+   "provenance": {
+    "observed": {
+     "fixes": 10,
+     "days": [
+      "2026-09-14",
+      "2026-09-17"
+     ]
+    },
+    "createdAt": "2026-09-18T04:38:20.247Z",
+    "note": "single-vehicle observations never rewrite truth; this proposal is a lab artefact awaiting the replay gate"
+   },
+   "promotion": {
+    "state": "FIELD_ELIGIBLE",
+    "assessedAt": "2026-09-18",
+    "why": "evidence: address-points + geocode-saved; replay: recovered 132, wrong 0, other fields unchanged, suite green; independently graded correct on 130 fix(es); offline strong evidence present",
+    "needs": "—"
+   }
+  }
+ ],
+ "promotionRules": "promotion.js 2026-09-17",
+ "parent": "lab-2026-09-18-v6",
+ "parentSemanticSignature": "sha256:6cc2077ecc50e6a1ecd3acc13b468994bd6c0f6f2c8700c386de16a8d1d996b4",
+ "note": "FIELD-TEST CANDIDATE: exactly the 17 FIELD_ELIGIBLE entries of lab-2026-09-18-v6; the 59 REPLAY_VALIDATED entries are deliberately excluded (promotion.js). LAB/REVIEW only until the Saturday decision; not merged into the main candidate."
+}
