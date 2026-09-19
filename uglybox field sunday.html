@@ -1,0 +1,262 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>F1rstHUD — Ugly Box #1 — EXPERIMENTAL (Sunday stack candidate)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black">
+<style>
+  /* SINGLE-IPHONE FIELD MODE. The phone screen IS what the FEELWORLD mirrors. So: black, four fields, nothing else.
+     The accepted lab engine is hosted by field_engine_host.js in this page (no iframe): its HTML is fetched, hash-verified, and its script evaluated unchanged.
+     Logging, flags and MARK run invisibly. Settings only via triple-tap top-left, when parked. */
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:"DIN Alternate","Roboto Condensed","Arial Narrow",Arial,sans-serif;color:#fff;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  #stack{position:absolute;left:50%;top:50%;padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px);box-sizing:border-box;text-align:center;white-space:nowrap;--size:1;--nx:0px;--ny:0px;--intensity:1;--mirror:-1;
+         transform:translate(calc(-50% + var(--nx)),calc(-50% + var(--ny))) scaleX(var(--mirror)) scale(var(--size));opacity:var(--intensity)}
+  .f{line-height:1.05;letter-spacing:.06em;font-weight:700}
+  /* STABLE FOUR-LINE LAYOUT: every row is always present at a fixed height; a missing value shows ---- (never removed). */
+  .row4{display:grid;grid-template-columns:22vw 1fr;align-items:baseline;height:14vh;line-height:14vh;text-align:left;white-space:nowrap}
+  .lbl{font-size:4vh;color:#fff;letter-spacing:.12em;font-weight:600}   /* ALL WHITE: labels too */
+  /* ONE officer-facing colour: WHITE. Hierarchy from size and spacing only. Intensity (day/night) is separate. */
+  .val{font-size:11.6vh;color:#fff}   /* +22% (was 9.5vh) — Ugly Box #1 readability; long names fall back to the previous size, see show() */
+  #direction{font-size:12.8vh}#next{font-size:10.4vh}   /* +22% (were 10.5vh / 8.5vh) */
+  .val.empty{color:#fff}      /* ---- is WHITE and present; intensity, not colour, controls visibility */
+  #tap{position:absolute;inset:0;background:transparent}                                    /* the whole screen is MARK */
+  #ack{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .15s}
+  #corner{position:absolute;left:0;top:0;width:18vw;height:18vh}                            /* triple-tap → settings (parked) */
+  #settings{position:absolute;inset:0;background:#111;color:#ddd;display:none;font-family:system-ui,Arial;font-size:16px;overflow:auto;padding:12px;box-sizing:border-box}
+  #settings button{font-size:18px;padding:12px 14px;margin:4px;border:0;border-radius:8px;background:#333;color:#eee}
+  #settings .row{margin:8px 0}#settings .pill{padding:4px 8px;border-radius:12px;background:#222;font-size:13px;margin-right:6px}.on{background:#1f5f2f!important}.off{background:#5f1f1f!important}
+  #diag{font-family:monospace;font-size:12px;white-space:pre-wrap;color:#9c9;background:#0b0b0b;padding:8px;max-height:30vh;overflow:auto}
+  #hint{position:absolute;right:6px;bottom:4px;font-size:10px;color:#1a1a1a}               /* near-invisible on the combiner */
+</style></head>
+<body>
+<div id="stack">
+  <div class="row4"><span class="lbl">DIRECTION</span><span id="direction" class="f val">----</span></div>
+  <div class="row4"><span id="row2lbl" class="lbl">BLOCK</span><span id="block" class="f val">----</span></div>
+  <div class="row4"><span class="lbl">CURRENT</span><span id="current" class="f val">----</span></div>
+  <div class="row4"><span class="lbl">NEXT</span><span id="next" class="f val">----</span></div>
+</div>
+<div id="ack"></div>
+<div id="tap"></div>
+<div id="corner"></div>
+<div id="hint">tap = MARK · triple-tap top-left = settings</div>
+<div id="settings">
+  <div class="row"><b style="color:#fc6">EXPERIMENTAL PARALLEL BUILD — uglybox_field_sunday.html — NOT the accepted page</b><br><b>Ugly Box #1 — Sunday stack candidate — settings (PARKED ONLY)</b> <button id="close">BACK TO HUD</button></div>
+  <div class="row"><span id="pLab" class="pill off">engine</span><span id="pPkg" class="pill off">block pkg</span><span id="pLive" class="pill off">LIVE</span><span id="pLog" class="pill">0 fixes</span></div>
+  <div class="row" id="engineMsg" style="font-family:monospace;font-size:13px;color:#fc9;white-space:pre-wrap">engine: loading…</div>
+  <div class="row" id="bundleMsg" style="font-family:monospace;font-size:13px;color:#9cf"></div>
+  <div class="row"><button id="btnPkg">LOAD BLOCK PACKAGE</button><input id="pkgIn" type="file" accept=".json" style="display:none"><button id="btnLive">START LIVE</button><button id="btnStop">STOP LIVE</button></div>
+  <div class="row">Mapbox token: <input id="tok" type="text" placeholder="pk.… (shared with the lab page)" style="font-size:16px;width:60%"> <button id="btnTok">SAVE</button>
+    <div style="font-size:13px;color:#aaa">Read from the accepted page's saved token if present; saved only under this page's own key (sun_mapbox_public_token). Needed for live tiles.</div></div>
+  <div class="row">C7 EXPERIMENT (officer BLOCK = C7; accepted engine logged alongside): daily geocode cap <input id="capDaily" type="number" value="20000" style="width:90px;font-size:16px"> session cap <input id="capSession" type="number" value="20000" style="width:90px;font-size:16px"> <button id="btnCap">SAVE</button>
+    <div id="c7stat" style="font-family:monospace;font-size:13px;color:#9cf">c7: idle</div></div>
+  <div class="row">Corrections (field17 package): <button id="btnCorr">OFF</button> <span id="corrStat" style="font-family:monospace;font-size:13px;color:#9cf">not loaded</span> <span style="font-size:13px;color:#aaa">consulted only where the officer would otherwise see a blank BLOCK; the cell's geocode is then not requested</span></div>
+  <div class="row">Field log mode: <button id="btnLogMode">FULL</button> <span style="font-size:13px;color:#aaa">COMPACT keeps each fix as one compact string (≈ 6× less memory on a long shift); export is the identical JSONL either way. Takes effect at the next LIVE start.</span></div>
+  <div class="row">Tile host: <button id="btnHost">ASYNC</button> <span id="hostStat" style="font-family:monospace;font-size:13px;color:#9cf">-</span> <span style="font-size:13px;color:#aaa">ASYNC = core tiles waited ≤ 2.5 s, lookahead in the background, no display freeze on a slow cell request; BLOCKING = the accepted host (every tile awaited). Takes effect at the next LIVE start.</span></div>
+  <div class="row">Controlled-access prefetch (staged): <button id="btnPrefetch">OFF</button> <span id="prefStat" style="font-family:monospace;font-size:13px;color:#9cf">-</span> <span style="font-size:13px;color:#aaa">extra forward tiles for the frozen engine on freeways only (replay: 117/124 horizon episodes recovered, 0 contradictions, ≈ +64 % tiles). Takes effect at the next LIVE start.</span></div>
+  <div class="row">NEXT highway-entrance overlay (experimental): <button id="btnHwy">OFF</button> <span style="font-size:13px;color:#aaa">replay-validated on the US 75 entrance and Test #1 frontage roads only; enable for a dedicated test</span></div>
+  <div class="row">BLOCK hold (experimental, 2026-09-19): <button id="btnBlockHold">ON</button> <span style="font-size:13px;color:#aaa">keeps the last trusted BLOCK while stopped or within 25 m of where it was established (140 m when pulled off the road), only while CURRENT is the same road and no evidence contradicts it; a road change, a contradiction or the bound clears it. Live evidence: 2026-09-19 San Antonio drives. Takes effect at the next LIVE start.</span></div>
+  <div class="row"><button id="btnPkgExport">EXPORT LAB PACKAGE (tiles, for replay)</button><span style="font-size:13px;color:#aaa"> — runs the lab's own buildPackage() on this drive's fixes; needs network + token</span></div>
+  <div class="row">HUD: <button data-adj="mirror">MIRROR</button><button data-adj="size+">A+</button><button data-adj="size-">A−</button><button data-adj="up">UP</button><button data-adj="down">DOWN</button><button data-adj="left">LEFT</button><button data-adj="right">RIGHT</button></div>
+  <div class="row">Software INTENSITY (text opacity — NOT monitor backlight): <button data-adj="i+">+</button><button data-adj="i-">−</button><span id="istat" class="pill">100%</span>
+    <div style="font-size:13px;color:#aaa">FEELWORLD backlight is a physical control on the monitor. Set it manually for day/night. This page cannot change it.</div></div>
+  <div class="row"><button id="btnExport">EXPORT FIELD LOG</button><button id="btnReport">POST-DRIVE REPORT</button><button id="btnDemo">DEMO (optics, no GPS)</button></div>
+  <div class="row"><b>Marks this session:</b> <span id="marks">0</span> &nbsp; (single tap anywhere on the HUD = MARK SOMETHING WRONG; timestamp + fix number recorded; screen flashes once to confirm)</div>
+  <div id="diag">no fixes yet</div>
+</div>
+<script src="field_bundle_sunday.js"></script>
+<script src="field_engine_host_sunday.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+/* ---------- EXPERIMENTAL PARALLEL BUILD (2026-09-18) ----------
+   This page is the EXPERIMENTAL Sunday-stack candidate deployed BESIDE the accepted uglybox_field.html. Isolation rules:
+     · it loads only uniquely named assets (field_bundle_sunday.js, field_engine_host_sunday.js) plus the frozen engine HTML (read-only, hash-verified);
+     · every persisted setting lives under its own localStorage namespace ("sun_…"); the accepted page's keys are never written;
+     · the Mapbox token is READ from the accepted page's key as a fallback (so it need not be typed twice) and SAVED only under the namespaced key.
+   Deleting this page and its two assets from GitHub leaves the accepted page and its state untouched. The marker below appears in
+   SETTINGS, the engine/bundle status lines, the session header and the diagnostics record — never on the four-row HUD. */
+const BUILD_ID='EXPERIMENTAL uglybox_field_sunday 2026-09-19 (live-fix: decoded shield path; BLOCK hold toggle)';
+const NS='sun_';
+const ST={ get:k=>{ try{ return localStorage.getItem(NS+k); }catch(e){ return null; } },
+           set:(k,v)=>{ try{ localStorage.setItem(NS+k,v); }catch(e){} },
+           remove:k=>{ try{ localStorage.removeItem(NS+k); }catch(e){} },
+           token:()=>{ try{ return ST.get('mapbox_public_token')||localStorage.getItem('mapbox_public_token')||''; }catch(e){ return ''; } } };   /* read-only fallback to the accepted page's token; never written */
+/* localStorage-shaped view handed to the frozen engine and the C7 runner: same interface, namespaced keys only */
+const NS_STORAGE={ getItem:k=>k==='mapbox_public_token'?ST.token():ST.get(k), setItem:(k,v)=>ST.set(k,v), removeItem:k=>ST.remove(k) };
+/* ---------- presentation (persisted in URL hash) ---------- */
+const P={mirror:-1,size:1,nx:0,ny:0,intensity:1};
+try{ if(location.hash.length>1) Object.assign(P,JSON.parse(atob(location.hash.slice(1)))); }catch(e){}
+const stack=$('stack'); function apply(){ stack.style.setProperty('--mirror',P.mirror); stack.style.setProperty('--size',P.size); stack.style.setProperty('--nx',P.nx+'px'); stack.style.setProperty('--ny',P.ny+'px'); stack.style.setProperty('--intensity',P.intensity); $('istat').textContent=Math.round(P.intensity*100)+'%'; location.hash=btoa(JSON.stringify(P)); } apply();
+document.querySelectorAll('#settings [data-adj]').forEach(b=>b.onclick=()=>{ const a=b.dataset.adj; if(a==='mirror')P.mirror*=-1; else if(a==='size+')P.size*=1.08; else if(a==='size-')P.size/=1.08; else if(a==='up')P.ny-=10; else if(a==='down')P.ny+=10; else if(a==='left')P.nx-=10; else if(a==='right')P.nx+=10; else if(a==='i+')P.intensity=Math.min(1,P.intensity+.1); else if(a==='i-')P.intensity=Math.max(.1,P.intensity-.1); apply(); });
+/* ---------- the four fields ---------- */
+const FIELD={direction:$('direction'),block:$('block'),current:$('current'),next:$('next')};
+/* FIT RULE (presentation only; 2026-09-18 readability audit). The stack is shrink-to-fit, so a value never "overflows its field" — it widens the
+   stack past the screen and is clipped at both ends (measured headless: "COLLIN COUNTY OUTER LOOP" at 11.6vh = 934 px on an 844 px iPhone 14
+   landscape; the earlier scrollWidth test could never fire). A value is now measured against the width actually available to it (viewport minus
+   safe-area insets minus the label column, at the stack's current scale) and ONLY that value steps down from the enlarged size until it fits,
+   with a floor; row heights are fixed by CSS (14vh line boxes) so nothing else moves. */
+const FIT={direction:[12.8,6],block:[11.6,6],current:[11.6,6],next:[10.4,5.5]};   /* [enlarged vh, floor vh] */
+function fitValue(el,k){ const [big,floor]=FIT[k]||[11.6,6]; el.style.fontSize=''; const stack=document.getElementById('stack'); const cs=getComputedStyle(stack); const insets=(parseFloat(cs.paddingLeft)||0)+(parseFloat(cs.paddingRight)||0); const lbl=el.parentElement&&el.parentElement.querySelector('.lbl'); const lblW=lbl?lbl.getBoundingClientRect().width:0; const avail=Math.max(60,window.innerWidth-insets-lblW-8); if(el.getBoundingClientRect().width<=avail) return; for(let s=big-0.4;s>=floor;s-=0.4){ el.style.fontSize=s.toFixed(1)+'vh'; if(el.getBoundingClientRect().width<=avail) return; } }
+function show(d){ const r2=document.getElementById('row2lbl'); if(r2) r2.textContent=d.row2Label||'BLOCK'; const set=(k,txt)=>{ const el=FIELD[k]; if(txt==null||txt===''){el.classList.add('empty');el.textContent='----';} else {el.classList.remove('empty');el.textContent=String(txt).toUpperCase();}
+    fitValue(el,k); };
+  /* officer-facing DIRECTION: four words only. The HUD state supplies a four-cardinal value with hysteresis; if an 8-way
+     value ever arrives (older bundle), only the four pure cardinals are shown and diagonals fall back to ---- rather than
+     being mapped without hysteresis. Raw course and 8-way remain in the log. */
+  const WORDS={N:'NORTH',E:'EAST',S:'SOUTH',W:'WEST',NE:'NORTHEAST',SE:'SOUTHEAST',SW:'SOUTHWEST',NW:'NORTHWEST'};
+  if(d.direction&&!/^(N|E|S|W)$/.test(d.direction)&&!window.__bundleMismatchFlagged){ window.__bundleMismatchFlagged=true; try{ LOG.push({kind:'flag',type:'HUD_BUNDLE_MISMATCH',t:Date.now(),detail:{direction:d.direction,note:'8-way value received: field_bundle.js is not the adopted v5 build'}}); }catch(e){} }
+  set('direction',d.direction?(WORDS[d.direction]||d.direction):null); set('block',d.block?String(d.block).replace(/\s*BLOCK$/i,''):null); set('current',d.current);
+  set('next',d.next?((d.nextIsExit&&!/^EXIT\b/i.test(d.next)?'EXIT ':'')+d.next):null); }   /* 2026-09-18 appliance test: the 0.1.14 engine's exit names already begin with "EXIT" — the accepted page rendered "EXIT EXIT 47B" (logs record the HUD value, so no log ever showed it) */
+/* ---------- BLOCK package + store (same code path as the panel/replay) ---------- */
+let PKG=null,STORE=null,ORIGIN=null,GRID=null,PROJ=null;
+function projector(o){ const kx=111320*Math.cos(o.lat*Math.PI/180),ky=110540; return ll=>[(ll[0]-o.lon)*kx,(ll[1]-o.lat)*ky]; }
+$('btnPkg').onclick=()=>$('pkgIn').click();
+$('pkgIn').onchange=async e=>{ const f=e.target.files[0]; if(!f) return; PKG=JSON.parse(await f.text()); $('pPkg').className='pill on'; if(ORIGIN) buildStore(); diag('block package: '+PKG.ranges.length+' ranges, '+PKG.points.length+' points'); };
+function buildStore(){ PROJ=projector(ORIGIN); STORE=new F1.Block.BlockEvidenceStore(); const canon=F1.Alias.canon; const G=200; GRID=new Map();
+  for(const r of PKG.ranges){ const pts=r.pts.map(PROJ); const rec={roadId:null,name:r.name,pts,left:r.left,right:r.right,source:r.source,tier:r.tier,tlid:r.tlid,cls:r.cls}; STORE.addRange(rec); if(r.alias) STORE.addRange(Object.assign({},rec,{name:r.alias}));
+    const g={label:r.name,cls:r.cls||'',m:pts,hasRange:true,fl:r.left?r.left.from:null,tl:r.left?r.left.to:null,fr:r.right?r.right.from:null,tr:r.right?r.right.to:null,pl:r.left?'O':'Z',pr:r.right?'E':'Z',id:r.tlid,tier:r.tier,source:r.source}; for(const p of pts){ const k=Math.floor(p[0]/G)+','+Math.floor(p[1]/G); if(!GRID.has(k)) GRID.set(k,new Set()); GRID.get(k).add(g); } }
+  for(const p of PKG.points){ const [x,y]=PROJ([p[0],p[1]]); STORE.addPoint({roadId:null,name:p[3],x,y,number:p[2],source:'points'}); const cb=canon(p[3]).base; if(cb) STORE.addPoint({roadId:null,name:cb,x,y,number:p[2],source:'points'}); }
+  /* C7 experimental runner (accepted engine untouched) */
+  const recs7=[...new Set([...GRID.values()].flatMap(st=>[...st]))]; for(const r of recs7){ r.base=F1.Alias.canon(r.label).base; r.ranges=[r.fl!=null&&r.tl!=null&&r.pl!=='Z'?[+r.fl,+r.tl]:null,r.fr!=null&&r.tr!=null&&r.pr!=='Z'?[+r.fr,+r.tr]:null].filter(x=>x&&x[0]!=null&&x[1]!=null); }
+  const pdb=F1.PointsDB.makePointsDB({lat:ORIGIN.lat,lon:ORIGIN.lon},{points:PKG.points.map(p=>({lon:p[0],lat:p[1],number:p[2],street:p[3]})),roads:PKG.ranges});
+  const capD=+(ST.get('c7_cap_daily')||20000), capS=+(ST.get('c7_cap_session')||20000);
+  C7=F1.C7Runner.makeRunner({core:F1.C7Core,pointsDB:pdb,near,canon:F1.Alias.canon,same:F1.OldSame.same,projectFraction:F1.Block.projectFraction,fetchImpl:async(u)=>{ const r=await fetch(u); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); },token:()=>ST.token(),cap:{daily:capD,session:capS},storage:NS_STORAGE,now:()=>Date.now(),log:x=>LOG.push(x)});
+  diag('block store built · C7 runner ready (cap daily '+capD+', session '+capS+')'); }
+const near=pos=>{ const s=new Set(),G=200,gx=Math.floor(pos[0]/G),gy=Math.floor(pos[1]/G); for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){const c=GRID.get((gx+dx)+','+(gy+dy)); if(c) for(const r of c) s.add(r);} return [...s]; };
+function blockFor(cur,pos,acc,heading){ if(!STORE||!cur||F1.Alias.isMainline(cur)) return null; const B=F1.Block; const t0=performance.now(); let inf=B.inferAddress(STORE,{roadId:null,name:cur,confident:true},pos,{gnssAcc:acc}); let rule=null,road=cur;
+  if(inf.support==='UNAVAILABLE'){ const cands=near(pos).map(rd=>({rd,pr:B.projectFraction(rd.m,pos)})).filter(x=>x.pr.d<=25).sort((a,b)=>a.pr.d-b.pr.d); const r=F1.Alias.resolve(cur,cands,heading);
+    if(r&&!r.blank){ const rd=r.rd; const tmp=new B.BlockEvidenceStore(); tmp.addRange({roadId:null,name:cur,pts:rd.m,left:rd.fl!=null?{from:rd.fl,to:rd.tl}:null,right:rd.fr!=null?{from:rd.fr,to:rd.tr}:null,tlid:rd.id,source:rd.source,tier:rd.tier}); for(const p of STORE.pointsFor(null,cur)) tmp.addPoint(p); inf=B.inferAddress(tmp,{roadId:null,name:cur,confident:true},pos,{gnssAcc:acc}); rule=r.rule; road=rd.label; } }
+  const f=B.blockField(inf); return {value:f.value,support:inf.support,rule,sourceRoad:road,sourceTier:inf.sourceTier||null,corroboratedBy:inf.corroboratedBy||null,pointsUsed:!!inf.pointsUsed,number:inf.number,reason:inf.reason,ms:performance.now()-t0}; }
+/* ---------- engine: the FROZEN lab script, hosted here (no iframe, no lab globals) ---------- */
+let BLOCK_HOLD_ON=ST.get('block_hold')!=='off';   /* default ON (2026-09-19: passed both live drives, 11 replays, tester, referee, regression, boundary tests); one tap to OFF */ const BLOCK_HOLD_P={onRoadM:25,offRoadM:140};   /* bounds from the corpus hundred-length distribution (BLOCK_HOLD_2026-09-19.md) */
+const HUD=new F1.HudState({nextTrustedOverride:true,blockHold:{enabled:BLOCK_HOLD_ON,onRoadM:BLOCK_HOLD_P.onRoadM,offRoadM:BLOCK_HOLD_P.offRoadM}}); /* v5.2: four-cardinal dead band; scoped nextTrustedOverride for the committed-ramp overlay only */ const FLAG=new F1.FieldLog.Flagger(); const LOG=[]; let seq=0;
+/* LOG MODE (2026-09-18, phone reliability; default FULL = today's behaviour). COMPACT keeps every fix record as ONE compact string (log_compact.js, lossless:
+   export decodes to the identical JSONL) instead of a live object graph: ≈ 1.9 MB/h instead of ≈ 12.6 MB/h of heap. Non-fix records (flags, marks) stay objects. */
+/* CORRECTION PACKAGE (2026-09-18, item 5): the separate 17-entry field-test package (correction_package_field17.json, fetched from the page's own folder if present).
+   Default OFF; the Saturday review decides. Consulted only where the officer would otherwise see a blank BLOCK (C7 not evaluated / declined); a covered cell
+   skips the C7 geocode (that is the network saving). Every use is logged on the fix record (rec.correction). Never a value on a controlled-access road. */
+let CORR_ON=ST.get('corrections')==='on'; const CORR_FILE='correction_package_field17.json';
+/* fail-safe loader (correction_loader.js): shape + allow-listed version + recomputed semantic signature + withdrawn list; refused packages are never consulted; a failed reload keeps the previous good one; Patrol Mode never waits for it */
+const CORR_ALLOWED=['field17-2026-09-18-v1']; const CORR_WITHDRAWN=['block|farm to market 121|66846,-193268'];
+const CORRL=F1.CorrectionLoader.make({file:CORR_FILE,allowedVersions:CORR_ALLOWED,withdrawn:CORR_WITHDRAWN,log:x=>LOG.push({kind:'flag',type:'CORRECTIONS',t:Date.now(),detail:{message:x}}),onStatus:st=>{ $('corrStat').textContent=(st.on?'ON':'OFF')+' · '+st.message+(st.state==='ready'?' · active '+st.entries+' · used '+st.used:''); }});
+CORRL.setOn(CORR_ON); setTimeout(()=>{ CORRL.load().catch(()=>{}); },0);   /* after the HUD is up; never awaited by anything */
+$('btnCorr').textContent=CORR_ON?'ON':'OFF'; $('btnCorr').onclick=()=>{ CORR_ON=!CORR_ON; ST.set('corrections',CORR_ON?'on':'off'); $('btnCorr').textContent=CORR_ON?'ON':'OFF'; CORRL.setOn(CORR_ON); };
+const corrCell=(lat,lon)=>Math.round(lat*2000)+','+Math.round(lon*2000);
+let LOG_MODE=ST.get('log_mode')==='full'?'full':'compact';   /* SUNDAY STACK: COMPACT is the default (lossless, ≈ 6× less heap); FULL stays available as rollback/debug */ const LOGC=(F1.LogCompact&&F1.LogCompact.makeEncoder)?F1.LogCompact.makeEncoder():null; if(!LOGC) LOG_MODE='full';
+const logPush=r=>{ LOG.push((LOG_MODE==='compact'&&r&&r.kind==='fix')?LOGC.push(r):r); }; const logRecords=()=>LOG_MODE==='compact'?F1.LogCompact.decode(LOG.map(r=>typeof r==='string'?r:JSON.stringify(r)),LOGC.dict):LOG;
+const OVL={evaluated:0,proposals:0,refusedWithLinkNear:0,skippedHeld:0,skippedIncomplete:0,errors:0};   /* overlay diagnostics counters (Sunday diagnostics record) */
+let LAST_FIX_REC=null, LAST_NEXT_RAW=null; const logChars=()=>LOG.reduce((a,r)=>a+(typeof r==='string'?r.length:0),0); let API=null; const FIXES=[]; let IDENT=null; let C7=null; let MILE=null; let RQ=null; let SHIELDS=null; let ROUTE_DIR=null; let HWY_ON=ST.get('hwy_entrance')!=='off';   /* v3 committed-on-ramp overlay: default ON (17/17 correct, 0 false across all recorded drives) */
+$('btnLogMode').textContent=LOG_MODE.toUpperCase(); $('btnLogMode').onclick=()=>{ const next=LOG_MODE==='compact'?'full':'compact'; ST.set('log_mode',next); $('btnLogMode').textContent=next.toUpperCase()+' (next start)'; };
+$('btnBlockHold').textContent=BLOCK_HOLD_ON?'ON':'OFF'; $('btnBlockHold').onclick=()=>{ BLOCK_HOLD_ON=!BLOCK_HOLD_ON; ST.set('block_hold',BLOCK_HOLD_ON?'on':'off'); $('btnBlockHold').textContent=BLOCK_HOLD_ON?'ON':'OFF'; HUD.p.blockHold={enabled:BLOCK_HOLD_ON,onRoadM:BLOCK_HOLD_P.onRoadM,offRoadM:BLOCK_HOLD_P.offRoadM}; diag('BLOCK hold '+(BLOCK_HOLD_ON?'ON':'OFF')); };
+$('btnHwy').textContent=HWY_ON?'ON':'OFF'; $('btnHwy').onclick=()=>{ HWY_ON=!HWY_ON; ST.set('hwy_entrance',HWY_ON?'on':'off'); $('btnHwy').textContent=HWY_ON?'ON':'OFF'; };
+/* tile host + prefetch toggles (applied at the next LIVE start) */
+let HOST_MODE=ST.get('tile_host')==='blocking'?'blocking':'async'; let PREFETCH_ON=ST.get('prefetch')==='on'; let SUPPLY=null, PREFETCH=null;
+$('btnHost').textContent=HOST_MODE.toUpperCase(); $('btnHost').onclick=()=>{ HOST_MODE=HOST_MODE==='async'?'blocking':'async'; ST.set('tile_host',HOST_MODE); $('btnHost').textContent=HOST_MODE.toUpperCase()+' (next start)'; };
+$('btnPrefetch').textContent=PREFETCH_ON?'ON':'OFF'; $('btnPrefetch').onclick=()=>{ PREFETCH_ON=!PREFETCH_ON; ST.set('prefetch',PREFETCH_ON?'on':'off'); $('btnPrefetch').textContent=(PREFETCH_ON?'ON':'OFF')+' (next start)'; };
+$('capDaily').value=ST.get('c7_cap_daily')||20000; $('capSession').value=ST.get('c7_cap_session')||20000; $('btnCap').onclick=()=>{ ST.set('c7_cap_daily',$('capDaily').value); ST.set('c7_cap_session',$('capSession').value); diag('caps saved (apply on next package load)'); };
+(()=>{ const cm=HUD.p&&HUD.p.cardinalMode; const ok=cm===4; $('bundleMsg').textContent=BUILD_ID+' · HUD bundle field_bundle_sunday.js: '+(ok?'v5.2 (four-cardinal, dead-band) — OK':'NOT v5 (cardinalMode='+cm+') — replace field_bundle_sunday.js on GitHub'); $('bundleMsg').style.color=ok?'#9f9':'#f99'; })();
+const EXPECTED_SHA='ffd56d9b8863505f2b7389d9d476f27d4e509c3b73667d277291d5a3e656c672';
+$('tok').value=ST.token(); $('btnTok').onclick=()=>{ ST.set('mapbox_public_token',$('tok').value.trim()); diag('token saved (experimental namespace sun_mapbox_public_token; the accepted page\'s token is untouched)'); };
+/* The frozen lab HTML is fetched from THIS folder. Candidates, in order: the frozen filename, then the repo's usual name.
+   Whatever is found is hash-verified; a wrong version is refused and its hash reported. */
+const ENGINE_FILES=['F1rstHUD_AheadLab_0_1_14_ADAPTIVE_ACCEPTED.html','aheadlab.html'];
+const engineMsg=m=>{ $('engineMsg').textContent='engine: '+m; };
+(async()=>{ const tried=[];
+  for(const f of ENGINE_FILES){ let html=null; try{ const r=await fetch(f,{cache:'no-store'}); if(!r.ok){ tried.push(f+' → HTTP '+r.status); continue; } html=await r.text(); }catch(e){ tried.push(f+' → '+e.message); continue; }
+    try{ API=await F1Host.loadFrozenEngine(html,{expectedSha:EXPECTED_SHA,tokenProvider:()=>ST.token(),realDocument:document,localStorage:NS_STORAGE});
+      API.setMode('LIVE'); $('pLab').className='pill on'; engineMsg('LOADED from '+f+' · sha '+API.sha.slice(0,16)+'… verified (frozen 0.1.14) · '+BUILD_ID+' · host field_engine_host_sunday.js'); setupHost(); return; }
+    catch(e){ tried.push(f+' → '+e.message); } }
+  $('pLab').className='pill off'; engineMsg('NOT LOADED.\n'+tried.join('\n')+'\nFix: upload F1rstHUD_AheadLab_0_1_14_ADAPTIVE_ACCEPTED.html (the frozen file, sha ffd56d9b…) into the same folder as this page.'); })();
+/* ---------- SUNDAY STACK host: non-blocking tile supply (field_tile_supply.js) + optional staged prefetch (hwy_prefetch.js), installed through the loader's internals; frozen engine untouched ---------- */
+function setupHost(){ try{ PREFETCH=F1.HwyPrefetch.make(API,{strategy:'staged'}); SUPPLY=F1.TileSupply.make(API,{token:()=>ST.token(),waitAll:HOST_MODE==='blocking',coreWaitMs:HOST_MODE==='blocking'?1e9:2500,timeoutMs:HOST_MODE==='blocking'?1e9:8000,extras:PREFETCH_ON?((lat,lon,course,speed)=>PREFETCH.extrasFor(lat,lon,course,speed)):null,log:x=>LOG.push({kind:'flag',type:'TILE_SUPPLY',t:Date.now(),detail:{message:x}})}); SUPPLY.install(); $('hostStat').textContent=HOST_MODE+(PREFETCH_ON?' + staged prefetch':''); }
+  catch(e){ SUPPLY=null; PREFETCH=null; $('hostStat').textContent='host module failed ('+e.message+') → frozen ensureGraph'; LOG.push({kind:'flag',type:'TILE_SUPPLY',t:Date.now(),detail:{message:'setup failed: '+e.message}}); } }
+document.addEventListener('visibilitychange',()=>{ if(!SUPPLY) return; if(document.visibilityState==='hidden') SUPPLY.pause(); else SUPPLY.resume(); });
+function onD(D,fix){ if(!fix) return; if(PREFETCH) try{ PREFETCH.observe(D); }catch(e){}
+  /* graph-quality rules (async host): a HELD graph (core tile still missing) is not evidence about this position → no association this fix (the HUD's own context hold applies); an INCOMPLETE build (a lookahead tile still missing) may not introduce a NEW NEXT nor an overlay proposal (continuity-or-blank) */
+  const gHeld=!!(D.graph&&D.graph.coreMissing), gIncomplete=!!(D.graph&&D.graph.incomplete); if(!ORIGIN){ ORIGIN={lat:fix.lat,lon:fix.lon}; if(PKG) buildStore(); }
+  const pos=PROJ?PROJ([fix.lon,fix.lat]):[D.x,D.y]; const se=D.snap&&D.snap.edge; if(!IDENT&&GRID){ const labXY=(lat,lon)=>{ const O=API&&API.getORIGIN?API.getORIGIN():ORIGIN; const ff=O.lat*Math.PI/180; const ML=111132.92-559.82*Math.cos(2*ff)+1.175*Math.cos(4*ff), MO=111412.84*Math.cos(ff)-93.5*Math.cos(3*ff); return [(lon-O.lon)*MO,(lat-O.lat)*ML]; };
+    const shields=F1.ShieldIndex.make({decoded:API&&API.TILES?API.TILES:null,toXY:labXY,base64:()=>{throw new Error('n/a');}}); SHIELDS=shields;
+    MILE=F1.Milepoint.make({log:x=>LOG.push(x),now:()=>Date.now()}); RQ=F1.RoadQuality.make({sessionId:new Date().toISOString().slice(0,16),maxQueue:2000,suppress:ev=>ev.reason==='MILE_BLANK'&&(!MILE||MILE.sources().length===0),versions:{ahead:API?API.sha.slice(0,8):null,hud:'v5.2o',c7:'exp',bundle:'field_bundle_sunday',host:HOST_MODE,prefetch:PREFETCH_ON?'staged':'off'},packageVersion:PKG?(PKG.builtAt||null):null,log:x=>LOG.push(x)});
+    const PG=200,pgrid=new Map(); for(const p of PKG.points){ const [x,y]=PROJ([p[0],p[1]]); const k=Math.floor(x/PG)+','+Math.floor(y/PG); if(!pgrid.has(k)) pgrid.set(k,[]); pgrid.get(k).push({x,y,street:p[3]}); }
+    const pointsNear=(pos,rad)=>{ const out=[]; const gx=Math.floor(pos[0]/PG),gy=Math.floor(pos[1]/PG); for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){ const c=pgrid.get((gx+dx)+','+(gy+dy)); if(c) for(const q of c) if(Math.hypot(q.x-pos[0],q.y-pos[1])<=rad) out.push(q.street); } return out; };
+    IDENT=F1.RoadIdentity.makeIdentity(near,F1.Block.projectFraction,F1.Alias.canon,{shieldOf:e=>shields.shieldOf(e),pointsNear,nearestDesignated:(pt,r)=>shields.nearestDesignated(pt,r)}); ROUTE_DIR=F1.RoadIdentity.makeRouteDirection(); } const ID=IDENT?IDENT.identify(se,pos):{display:se?(se.name||null):null,trusted:!!(se&&se.name),kind:'no-metadata'}; const cur=ID.display; const blk=blockFor(cur,pos,fix.acc,fix.heading);
+  /* C7 EXPERIMENT: the accepted engine's answer (blk) is tier 1; C7 decides; officer sees C7; both are logged */
+  /* correction consult: only where the accepted engine has no BLOCK value on a surface road; a covered cell is not geocoded */
+  let corr=null; if(CORR_ON&&cur&&!(se&&F1.RoadIdentity.CONTROLLED.has(se.cls))&&!(blk&&blk.value!=null)&&!F1.Alias.isMainline(cur)){ const c=CORRL.get('block|'+String(F1.Alias.canon(cur).base||cur).toLowerCase()+'|'+corrCell(fix.lat,fix.lon)); if(c){ corr=c; const st=CORRL.status(); if(st.used%10===1) $('corrStat').textContent='ON · '+st.message+' · active '+st.entries+' · used '+st.used; } }
+  let c7=null; if(C7&&cur&&!corr){ C7.maybeEvaluate(fix,cur,!!D.hwy); const trusted=(D.state?D.state==='ON_ROAD':!!se)&&ID.trusted&&(fix.speed||0)>=1;
+    if(trusted&&!F1.Alias.isMainline(cur)){ try{ c7=C7.decide(fix,cur,pos,fix.heading,{hundred:blk&&blk.value!=null?Math.floor(+String(blk.value).replace(/\D/g,'')/100)*100:null,evidence:blk}); }catch(e){ LOG.push({kind:'flag',type:'C7_ERROR',t:fix.t,detail:{message:e.message}}); c7=null; } } }
+  const officerBlock=corr?corr.value:(c7&&c7.hundred!=null?(c7.hundred+' BLOCK'):null);
+  /* controlled-access: row 2 is MILE (value only from a VALIDATED milepoint source — none registered, so ----) */
+  const onCA=!!(se&&F1.RoadIdentity.CONTROLLED.has(se.cls)&&ID.designation); let mileVal=null; if(onCA&&MILE){ const m=MILE.lookup(ID.designation,fix.lat,fix.lon,null); mileVal=m?('MILE '+m.mile):null; }
+  /* experimental NEXT overlay: highway entrance surfacing (settings toggle; default OFF) */
+  let entrance=null; if(HWY_ON&&SHIELDS&&(gHeld||gIncomplete)) OVL[gHeld?'skippedHeld':'skippedIncomplete']++; if(HWY_ON&&SHIELDS&&!gHeld&&!gIncomplete){ OVL.evaluated++; try{ entrance=F1.HwyEntrance.propose(D,e=>F1.RoadIdentity.shieldLabel(SHIELDS.shieldOf(e),e.ref)||(/^(motorway|trunk)$/.test(e.cls||'')&&F1.RoadIdentity.loopDesignation?F1.RoadIdentity.loopDesignation(e.ref):null)||F1.RoadIdentity.routeLabel(e.name)||null,{nearestDesignated:(pt,r)=>SHIELDS.nearestDesignated(pt,r),shieldLabelFor:f=>F1.RoadIdentity.shieldLabel(f.shield,f.ref),parityAxis:F1.RoadIdentity.routeParityAxis}); }catch(e){ entrance=null; OVL.errors++; }
+    if(entrance) OVL.proposals++; else if(D.candidates&&D.candidates.some(c=>/_link$/.test(c.cls||'')&&c.station!=null&&c.station<=400)) OVL.refusedWithLinkNear++; }   /* SUNDAY DIAGNOSTICS: overlay refusals = evaluated fixes with a link candidate ≤ 400 m ahead and no proposal (the module's conservative rules said no) */
+  let nextRaw=entrance?entrance.next:(D.selected?F1.RoadIdentity.normalizeDisplay(D.selected.name):null); if(gHeld) nextRaw=null; else if(gIncomplete&&nextRaw!==LAST_NEXT_RAW) nextRaw=null; if(!gHeld&&!gIncomplete) LAST_NEXT_RAW=nextRaw;
+  const h=HUD.update({t:fix.t,heading:fix.heading,speed:fix.speed,associated:!gHeld&&(D.state?D.state==='ON_ROAD':!!se),engineState:D.state||null,edgeNamed:ID.trusted,edgeCls:se?se.cls:null,lat:fix.lat,lon:fix.lon,currentName:cur,nextName:nextRaw,nextConfident:!!nextRaw&&!!(D.selected||entrance),nextTrusted:(entrance&&entrance.committed)?{source:entrance.source,next:entrance.next,designation:entrance.designation,committed:true}:null,block:onCA?mileVal:officerBlock,blockAbsence:onCA?'absent':(officerBlock!=null?'none':(c7&&/INSUFFICIENT_AGREEMENT|NO_SAME_ROAD_ADDRESS/.test(c7.declineReason||'')||(c7&&c7.veto)?'contradiction':'absent'))});   /* BLOCK hold: C7 sample disagreement / no same-road address / veto = contradiction (clears); not consulted (stopped), no completed evaluation, cap, network = absence (hold within bounds) */
+  /* officer-facing route format: designation + HUD cardinal on controlled-access; street names elsewhere */
+  const routeDir=ROUTE_DIR?ROUTE_DIR.update(onCA?ID.designation:null,fix.lat,fix.lon):null;   /* signed route direction (I-35 S at a 225° heading), not the compass quadrant */
+  const curShown=onCA?F1.RoadIdentity.formatRoute({designation:ID.designation,name:h.displayed.current,cls:se.cls,dir:routeDir}):h.displayed.current;
+  show({direction:h.displayed.direction,block:h.displayed.block,current:curShown,next:h.displayed.next,nextIsExit:!!D.hwy,row2Label:onCA?'MILE':'BLOCK'});
+  /* road-quality events (deduplicated; local queue; no transport registered) */
+  if(RQ&&(fix.speed||0)>=1&&(D.state?D.state==='ON_ROAD':!!se)){ const ev={t:fix.t,lat:fix.lat,lon:fix.lon,acc:fix.acc,heading:fix.heading,speed:fix.speed,dir:h.displayed.direction,snap:se?{id:se.id,name:se.name,cls:se.cls}:null,routeRef:se?se.ref||null:null,roadClass:se?se.cls:null,roadIdentity:cur,identityKind:ID.kind,context:{chainStop:D.chain?D.chain.stopReason||null:null,onRamp:!!(se&&/_link$/.test(se.cls||'')),controlledAccess:onCA},displayed:{direction:h.displayed.direction,block:h.displayed.block,current:curShown,next:h.displayed.next},confidence:{current:h.current.state,block:h.block.state,next:h.next.state},c7:c7?{support:c7.support,tier:c7.tier||null}:null,declineReason:c7?c7.declineReason||null:null};
+    if(!curShown) RQ.create(Object.assign({},ev,{reason:'CURRENT_BLANK',field:'current'})); else if(/^ROUTE /.test(curShown)) RQ.create(Object.assign({},ev,{reason:'ROUTE_IDENTITY_GENERIC',field:'current'}));
+    if(onCA){ if(!mileVal) RQ.create(Object.assign({},ev,{reason:'MILE_BLANK',field:'mile'})); } else if(h.displayed.block==null&&curShown&&!F1.Alias.isMainline(curShown)) RQ.create(Object.assign({},ev,{reason:'BLOCK_BLANK',field:'block'}));
+    if(!h.displayed.next&&curShown) RQ.create(Object.assign({},ev,{reason:'NEXT_BLANK',field:'next'})); if(c7&&c7.veto) RQ.create(Object.assign({},ev,{reason:'CONFLICT',field:'block'})); }
+  const rec=F1.FieldLog.fixRecord(seq++,fix,D,h,blk,{engineMs:D.ms,blockMs:blk?blk.ms:null,fixToDisplayMs:Date.now()-fix.t},{identity:{display:ID.display,kind:ID.kind,how:ID.how||null,ref:se?se.ref||null:null}});
+  /* BOTH results, every fix: accepted engine (from blk) and C7 */
+  rec.acceptedBlock={value:blk?blk.value:null,support:blk?blk.support:null,tier:blk?blk.sourceTier:null,rule:blk?blk.rule:null,corroboratedBy:blk?blk.corroboratedBy:null,reason:blk?blk.reason:null};
+  rec.c7Block=c7?{value:officerBlock,support:c7.support,declineReason:c7.declineReason||null,tier:c7.tier||null,evidenceClass:c7.evidenceClass||null,tiers:c7.tiers||[],veto:!!c7.veto,agreeing:c7.agreeing||0,pointsSupport:c7.pointsSupport,nearestRange:c7.nearestRange,geocode:c7.detail&&c7.detail.geocode?c7.detail.geocode:null,answers:c7.detail&&c7.detail.answers?c7.detail.answers:null}:{value:null,support:'NOT_EVALUATED'};
+  rec.entrance=entrance?{next:entrance.next,via:entrance.via,committed:!!entrance.committed,walkM:entrance.walkM||null}:null; rec.correction=corr?{key:corr.key,value:corr.value,version:corr.version}:null; rec.c7Stats=C7?C7.stats():null; rec.tiles=SUPPLY?{mode:HOST_MODE,held:gHeld,incomplete:gIncomplete,missing:D.graph?(D.graph.missingTiles||0):0,inflight:SUPPLY.stats().inflightNow,queue:SUPPLY.stats().queueNow,waitMs:SUPPLY.stats().coreWaitMsTotal}:null; rec.prefetch=(PREFETCH&&PREFETCH_ON)?{stage:PREFETCH._S.stage,extras:PREFETCH._S.lastExtra?PREFETCH._S.lastExtra.size:0}:null; rec.disagreement=!!(c7&&blk&&blk.value!=null&&officerBlock!=null&&officerBlock!==blk.value);
+  if(C7&&seq%5===0){ const st=C7.stats(); $('c7stat').textContent='c7: requests '+st.requests+' · reused '+st.reused+' · throttled '+st.throttled+' · failures '+st.failures+' · cap remaining '+st.capRemaining+' · today '+st.dayRequests+(st.offline?' · OFFLINE':'')+(st.capReached?' · CAP REACHED':''); } LAST_FIX_REC=rec; logPush(rec); for(const fl of FLAG.push(rec)) logPush(fl);
+  $('pLog').textContent=seq+' fixes'; if($('settings').style.display==='block') diag('shown '+JSON.stringify(rec.shown)+'\nstates '+JSON.stringify(rec.fieldStates)+' road '+rec.roadState+'\nblock '+(blk?blk.support+' '+(blk.corroboratedBy||blk.rule||''):'-')+' snap '+(rec.snap?rec.snap.name+' '+rec.snap.perp.toFixed(1)+'m':'-')+' next '+JSON.stringify(rec.selectedNext)+'\nlatency '+(D.ms||0).toFixed(1)+'ms · tiles net '+(API?API.CTR.net:0)+' fail '+(API?API.CTR.fail:0)+(SUPPLY?'\nhost '+HOST_MODE+' · '+JSON.stringify(SUPPLY.stats()):'')); if(SUPPLY&&seq%5===0){ const st=SUPPLY.stats(); $('hostStat').textContent=HOST_MODE+(PREFETCH_ON?' + prefetch':'')+' · req '+st.requests+' · arrived '+st.arrivals+' · in-flight '+st.inflightNow+' · timeouts '+st.timeouts+' · failures '+st.failures+' · held '+st.heldGraph+' · incomplete '+st.incompleteBuilds+' · core waits '+st.coreWaits+' (max '+st.coreWaitMax+' ms)'+(PREFETCH_ON?' · extras '+PREFETCH.stats().extraUnique:''); } }
+function diag(s){ $('diag').textContent=s; }
+/* ---------- top-page geolocation → frozen engine (busy/pending dispatch identical to the lab's liveDispatch) ---------- */
+let watchId=null, dispatch=null;
+$('btnLive').onclick=()=>{ if(!API){ diag('engine not loaded yet'); return; } if(!navigator.geolocation){ diag('no geolocation'); return; } if(!window.isSecureContext){ diag('must be https'); return; }
+  if(!(ST.token()).startsWith('pk.')){ diag('save a Mapbox token first (settings)'); return; }
+  API.setMode('LIVE'); API.resetEngine(); if(SUPPLY) SUPPLY.reset(); LAST_NEXT_RAW=null; FIXES.length=0; dispatch=F1Host.makeDispatcher(API,(D,f)=>{ try{ onD(D,f); }catch(e){ diag('panel error: '+e.message); } },(e,f)=>{ LOG.push({kind:'flag',type:'ENGINE_ERROR',t:f.t,detail:{message:e.message}}); });
+  watchId=navigator.geolocation.watchPosition(pos=>{ const f=F1Host.fixFromCoords(pos.coords,Date.now()); FIXES.push(f); dispatch(f); },err=>{ LOG.push({kind:'flag',type:'GPS_ERROR',t:Date.now(),detail:{code:err.code,message:err.message}}); diag('GPS error '+err.code+': '+err.message); },{enableHighAccuracy:true,maximumAge:1000,timeout:15000});
+  $('pLive').className='pill on'; diag('LIVE started — fixes feed the frozen engine directly'); };
+$('btnStop').onclick=()=>{ if(watchId!==null){ navigator.geolocation.clearWatch(watchId); watchId=null; } $('pLive').className='pill off'; };
+/* ---------- lab package for engine replay: the lab's OWN buildPackage(), on this drive's fixes ---------- */
+$('btnPkgExport').onclick=async()=>{ if(!API){ diag('engine not loaded'); return; } if(!FIXES.length){ diag('no fixes recorded'); return; }
+  const marks=LOG.filter(r=>r.kind==='mark').map(m=>({t:m.t,type:m.type})); API.setMode('REPLAY'); API.REPLAY.fixes=FIXES.slice(); API.REPLAY.marks=marks; API.REPLAY.loaded='uglybox_'+new Date(FIXES[0].t).toISOString().replace(/[:.]/g,'-'); API.PKG.loaded=false;
+  diag('capturing tiles for '+FIXES.length+' fixes — keep the page open…'); try{ await API.buildPackage(); diag('lab package exported'); }catch(e){ diag('package export failed: '+e.message); } API.setMode('LIVE'); };
+/* ---------- MARK: single tap anywhere. Debounced 700 ms. Flash once. Never leaves the HUD. ---------- */
+let lastMark=0; $('tap').addEventListener('pointerdown',e=>{ const t=Date.now(); if(t-lastMark<700) return; lastMark=t; const lastFix=LAST_FIX_REC;
+  LOG.push(F1.FieldLog.markRecord('SOMETHING_WRONG',t,{seqAtOrBefore:lastFix?lastFix.seq:null,shownAtMark:lastFix?lastFix.shown:null})); if(RQ&&lastFix) RQ.create({t,lat:lastFix.lat,lon:lastFix.lon,acc:lastFix.acc,heading:lastFix.courseRaw,speed:lastFix.speed,dir:lastFix.shown.direction,snap:lastFix.snap,roadIdentity:lastFix.shown.current,displayed:lastFix.shown,confidence:lastFix.fieldStates,reason:'USER_MARKED_WRONG',field:null}); 
+  $('marks').textContent=LOG.filter(r=>r.kind==='mark').length; const a=$('ack'); a.style.opacity=.35; setTimeout(()=>a.style.opacity=0,150); if(navigator.vibrate) navigator.vibrate(60); });
+/* ---------- settings: triple-tap top-left within 1.2 s (parked) ---------- */
+let taps=[]; $('corner').addEventListener('pointerdown',e=>{ e.stopPropagation(); const t=Date.now(); taps=taps.filter(x=>t-x<1200); taps.push(t); if(taps.length>=3){ taps=[]; $('settings').style.display='block'; } });
+$('close').onclick=()=>{ $('settings').style.display='none'; };
+/* ---------- export / report / demo ---------- */
+function download(name,text){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text],{type:'application/json'})); a.download=name; a.click(); }
+/* SUNDAY FIRST-RUN DIAGNOSTICS (log only, never on the four-row HUD): a 'diagnostics' record summarises the whole run at export — tile requests / arrivals / cache
+   hits (engine CTR) / in-flight max / timeouts / failures / core waits and max wait / held & incomplete builds / warm-ahead / escalations, longest fix-to-display
+   latency and engine stalls > 2 s (from the fix records), staged-prefetch stage counts and extra tiles, NEXT fixes shown only with prefetch (rec.prefetch + NEXT
+   present while the engine's own window had none is not knowable live — the lab replay computes it; logged here: fixes with prefetch stage > 0 and a NEXT),
+   overlay proposals (rec.selectedNext.source), correction uses/status, log mode, runtime errors (ENGINE_ERROR / PANEL_ERROR / CORRECTIONS / TILE_SUPPLY flags),
+   network failures, GPS gaps, background/resume events. Per-fix detail stays on every fix record (rec.tiles / rec.prefetch / rec.correction / rec.timing). */
+function diagnosticsRecord(recs){ const fx=recs.filter(r=>r.kind==='fix'); const flags=recs.filter(r=>r.kind==='flag'); const cnt=t=>flags.filter(f=>f.type===t).length; const lat=fx.map(r=>r.timing&&r.timing.fixToDisplayMs||0); const eng=fx.map(r=>r.timing&&r.timing.engineMs||0); const st=SUPPLY?SUPPLY.stats():null; const pf=(PREFETCH&&PREFETCH_ON)?PREFETCH.stats():null; const cs=CORRL.status();
+  return {kind:'diagnostics',t:Date.now(),build:BUILD_ID,page:'uglybox_field_sunday.html',host:'field_engine_host_sunday.js',bundle:'field_bundle_sunday.js',storageNamespace:NS,tileHost:HOST_MODE,prefetch:PREFETCH_ON?'staged':'off',blockHold:BLOCK_HOLD_ON?BLOCK_HOLD_P:'off',blockHoldFixes:HUD.blockHolds||0,logMode:LOG_MODE,fixes:fx.length,
+    tiles:st?{requests:st.requests,arrivals:st.arrivals,empties:st.empties,engineCacheHits:API?API.CTR.hit:null,engineNet:API?API.CTR.net:null,engineFail:API?API.CTR.fail:null,bytes:API?API.CTR.bytes:null,maxInFlight:st.maxInFlight,maxQueue:st.maxQueue,timeouts:st.timeouts,failures:st.failures,aborted:st.aborted,coreWaits:st.coreWaits,coreWaitMsTotal:st.coreWaitMsTotal,coreWaitMax:st.coreWaitMax,coreWaitTimeouts:st.coreWaitTimeouts,heldGraph:st.heldGraph,incompleteBuilds:st.incompleteBuilds,rebuilds:st.rebuilds,warmArrivals:st.warmArrivals,escalated:st.escalated,ewmaLatencyMs:st.ewmaLatencyMs,maxLatencyMs:st.maxLatencyMs,errors:st.errors}:null,
+    latency:{fixToDisplayMaxMs:Math.max(0,...lat),fixToDisplayP95Ms:lat.length?lat.slice().sort((a,b)=>a-b)[Math.floor(lat.length*0.95)]:0,engineStallsOver2s:eng.filter(x=>x>2000).length,engineMaxMs:Math.max(0,...eng),fixesHeld:fx.filter(r=>r.tiles&&r.tiles.held).length,fixesIncomplete:fx.filter(r=>r.tiles&&r.tiles.incomplete).length},
+    prefetchStats:pf?{stageFixes:pf.stageFixes,extraUnique:pf.extraUnique,extraServed:pf.extraServed,extraMissing:pf.extraMissing,rebuildsPrefetched:pf.rebuildsPrefetched,errors:pf.errors,fixesWithNextAtStage:fx.filter(r=>r.prefetch&&r.prefetch.stage>0&&r.shown&&r.shown.next).length,nextShownWithPrefetchExtras:fx.filter(r=>r.prefetch&&r.prefetch.stage>0&&r.prefetch.extras>0&&r.shown&&r.shown.next).length}:null,
+    overlay:{proposalFixes:fx.filter(r=>r.entrance).length,committedFixes:fx.filter(r=>r.entrance&&r.entrance.committed).length,enabled:HWY_ON,evaluated:OVL.evaluated,proposals:OVL.proposals,refusalsWithLinkNear:OVL.refusedWithLinkNear,skippedHeldGraph:OVL.skippedHeld,skippedIncompleteGraph:OVL.skippedIncomplete,errors:OVL.errors},
+    estimates:{logRecords:LOG.length,logChars:logChars(),logBytesApprox:logChars()*2,jsHeapUsedBytes:(typeof performance!=='undefined'&&performance.memory)?performance.memory.usedJSHeapSize:null,jsHeapLimitBytes:(typeof performance!=='undefined'&&performance.memory)?performance.memory.jsHeapSizeLimit:null,uptimeMs:Math.round(typeof performance!=='undefined'?performance.now():0)},corrections:{on:cs.on,state:cs.state,version:cs.version,entries:cs.entries,used:cs.used,consults:cs.consults,loads:cs.loads,failures:cs.failures,message:cs.message},
+    events:{engineErrors:cnt('ENGINE_ERROR'),panelErrors:cnt('PANEL_ERROR'),tileSupplyFlags:cnt('TILE_SUPPLY'),correctionFlags:cnt('CORRECTIONS'),gpsErrors:cnt('GPS_ERROR'),geolocationGaps:cnt('GEOLOCATION_GAP'),visibilityChanges:cnt('VISIBILITY'),lifecycle:cnt('PAGE_LIFECYCLE'),marks:recs.filter(r=>r.kind==='mark').length,decodeErrors:cnt('LOG_DECODE_ERROR')},c7:C7?C7.stats():null}; }
+$('btnExport').onclick=()=>{ const recs=logRecords(); recs.push(diagnosticsRecord(recs)); const head={kind:'session',startedAt:recs.length?recs[0].t:Date.now(),exportedAt:Date.now(),checkpoint:'PRE-UGLY-BOX-1',build:BUILD_ID,page:'uglybox_field_sunday.html',host:'field_engine_host_sunday.js',bundle:'field_bundle_sunday.js',storageNamespace:NS,mode:'single-iphone',logMode:LOG_MODE,tileHost:HOST_MODE,prefetch:PREFETCH_ON?'staged':'off',blockHold:BLOCK_HOLD_ON?BLOCK_HOLD_P:'off',corrections:CORRL.status(),blockpkg:PKG?{sources:PKG.sources,builtAt:PKG.builtAt}:null,origin:ORIGIN,presentation:P}; download('uglybox_fieldlog_'+new Date().toISOString().replace(/[:.]/g,'-')+'.jsonl',[JSON.stringify(head)].concat(recs.map(r=>JSON.stringify(r))).join('\n')); diag('exported '+recs.length+' records ('+LOG_MODE+' log mode) — also export the lab package from the lab page for engine replay'); };
+$('btnReport').onclick=()=>{ const rep=F1.FieldLog.report(logRecords()); download('uglybox_report_'+new Date().toISOString().replace(/[:.]/g,'-')+'.json',JSON.stringify(rep,null,2)); diag(JSON.stringify(rep,null,1).slice(0,3000)); };
+let demoTimer=null; $('btnDemo').onclick=()=>{ $('settings').style.display='none'; if(demoTimer){clearInterval(demoTimer);demoTimer=null;show({});return;} const seq=[{direction:'N',block:'1200 BLOCK',current:'Preston Rd',next:'Legacy Dr'},{direction:'N',block:null,current:'Preston Rd',next:'Legacy Dr'},{direction:'E',block:'2100 BLOCK',current:'Legacy Dr',next:'Coit Rd'},{direction:'S',block:null,current:'US 75 South',next:'48A',nextIsExit:true},{direction:'W',block:null,current:null,next:null}]; let i=0; show(seq[0]); demoTimer=setInterval(()=>{i=(i+1)%seq.length;show(seq[i]);},2500); };
+if('wakeLock' in navigator) navigator.wakeLock.request('screen').catch(()=>{});
+/* ---------- SOAK WATCHDOG (field-system only): records Safari/geolocation continuity evidence ----------
+   GEOLOCATION_GAP  no fix for >10 s while LIVE          VISIBILITY   page hidden/visible (Safari throttles hidden pages)
+   PAGE_LIFECYCLE   freeze/resume/pagehide/pageshow      WAKELOCK     lost/regained                                       */
+let lastFixAt=null, liveStarted=null; const soak={gaps:[],visibility:[],lifecycle:[],wakelock:[]};
+const _onD=onD; onD=function(D,f){ lastFixAt=Date.now(); return _onD(D,f); };
+setInterval(()=>{ if(!liveStarted||!lastFixAt) return; const gap=Date.now()-lastFixAt; if(gap>10000&&!(soak.gaps.length&&soak.gaps[soak.gaps.length-1].open)){ const g={kind:'flag',type:'GEOLOCATION_GAP',t:lastFixAt,detail:{sinceLastFixMs:gap,visibility:document.visibilityState},open:true}; soak.gaps.push(g); LOG.push(g); }
+  const last=soak.gaps[soak.gaps.length-1]; if(last&&last.open&&gap<=10000){ last.open=false; last.detail.endedT=lastFixAt; last.detail.durationMs=lastFixAt-last.t; } },2000);
+document.addEventListener('visibilitychange',()=>{ const e={kind:'flag',type:'VISIBILITY',t:Date.now(),detail:{state:document.visibilityState}}; soak.visibility.push(e); LOG.push(e); });
+for(const ev of ['freeze','resume','pagehide','pageshow']) window.addEventListener(ev,()=>{ const e={kind:'flag',type:'PAGE_LIFECYCLE',t:Date.now(),detail:{event:ev}}; soak.lifecycle.push(e); LOG.push(e); });
+const _live=$('btnLive').onclick; $('btnLive').onclick=()=>{ liveStarted=Date.now(); LOG.push({kind:'flag',type:'LIVE_START',t:liveStarted,detail:{ua:navigator.userAgent,gpsSource:'top-page',engineSha:API?API.sha:null}}); _live(); };
+/* soak summary shown in settings: the phone-side pre-read of soak_check.js */
+setInterval(()=>{ if($('settings').style.display!=='block'||!liveStarted) return; const fixes={length:seq}; const mins=((Date.now()-liveStarted)/60000).toFixed(1); const gaps=soak.gaps.filter(g=>!g.open).length+(soak.gaps.some(g=>g.open)?' (+1 open)':'');
+  $('marks').textContent=LOG.filter(r=>r.kind==='mark').length+'  |  SOAK '+mins+' min · fixes '+fixes.length+' · gaps>10s '+gaps+' · hidden events '+soak.visibility.filter(v=>v.detail.state==='hidden').length+' · last fix '+(lastFixAt?Math.round((Date.now()-lastFixAt)/1000)+'s ago':'-')+' · log '+LOG_MODE+(LOG_MODE==='compact'?' ≈ '+(logChars()/1048576).toFixed(1)+' MB':' (objects, ≈ '+(seq*3.7/1024).toFixed(1)+' MB est.)'); },1000);
+</script>
+</body></html>
